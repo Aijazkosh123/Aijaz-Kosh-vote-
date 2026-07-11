@@ -21,8 +21,9 @@ interface AuthRequest extends express.Request {
 let db: Database<sqlite3.Database, sqlite3.Statement>;
 
 async function initDb() {
+  const dbPath = process.env.VERCEL ? "/tmp/data.db" : "./data.db";
   db = await open({
-    filename: "./data.db",
+    filename: dbPath,
     driver: sqlite3.Database,
   });
 
@@ -87,6 +88,31 @@ async function initDb() {
     await db.run("INSERT INTO settings (key, value) VALUES ('jazzcash_name', 'KoSh Vote Software')");
     await db.run("INSERT INTO settings (key, value) VALUES ('system_api_key', 'DEFAULT_SYSTEM_API_KEY')");
   }
+
+  // Seed Easypaisa and SMM settings
+  const easypaisaNum = await db.get("SELECT * FROM settings WHERE key = 'easypaisa_number'");
+  if (!easypaisaNum) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('easypaisa_number', '03077321978')");
+  }
+  const easypaisaName = await db.get("SELECT * FROM settings WHERE key = 'easypaisa_name'");
+  if (!easypaisaName) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('easypaisa_name', 'KoSh Vote Software')");
+  }
+  const smmApiUrl = await db.get("SELECT * FROM settings WHERE key = 'smm_api_url'");
+  if (!smmApiUrl) {
+    await db.run("INSERT INTO settings (key, value) VALUES ('smm_api_url', 'https://perfectsmm.com/api/v2')");
+  }
+
+  // Apply migrations safely
+  try {
+    await db.exec("ALTER TABLE services ADD COLUMN upstream_service_id TEXT DEFAULT ''");
+  } catch (e) {}
+  try {
+    await db.exec("ALTER TABLE orders ADD COLUMN api_order_id TEXT DEFAULT ''");
+  } catch (e) {}
+  try {
+    await db.exec("ALTER TABLE orders ADD COLUMN api_response TEXT DEFAULT ''");
+  } catch (e) {}
 
   // Seed Admin and default users
   const adminUser = await db.get("SELECT * FROM users WHERE email = 'admin@kosh.com'");
@@ -162,11 +188,24 @@ function requireAdmin(req: AuthRequest, res: express.Response, next: express.Nex
   next();
 }
 
-async function startServer() {
-  await initDb();
+const app = express();
+app.use(express.json({ limit: "25mb" })); // Large payload for screenshots (base64)
 
-  const app = express();
-  app.use(express.json({ limit: "25mb" })); // Large payload for screenshots (base64)
+// Middleware to ensure DB is initialized on every request (crucial for Serverless environments like Vercel)
+app.use(async (req, res, next) => {
+  if (!db) {
+    try {
+      await initDb();
+    } catch (err: any) {
+      console.error("Database initialization failed:", err);
+      res.status(500).json({ error: "Internal Database Error: " + err.message });
+      return;
+    }
+  }
+  next();
+});
+
+async function startServer() {
 
   // --- API ROUTES ---
 
@@ -320,6 +359,20 @@ async function startServer() {
     try {
       const services = await db.all("SELECT * FROM services ORDER BY category, name");
       res.json(services);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Fetch public settings for deposit guides
+  app.get("/api/settings/public", async (req, res) => {
+    try {
+      const dbSettings = await db.all("SELECT key, value FROM settings WHERE key IN ('jazzcash_number', 'jazzcash_name', 'easypaisa_number', 'easypaisa_name')");
+      const mapped = dbSettings.reduce((acc: any, curr) => {
+        acc[curr.key] = curr.value;
+        return acc;
+      }, {});
+      res.json(mapped);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -654,43 +707,161 @@ async function startServer() {
     }
   });
 
-  // Admin update service price/limit
+  // Admin update service price/limit/upstream id
   app.post("/api/admin/services/update", authenticateToken, requireAdmin, async (req, res) => {
     try {
-      const { serviceId, price_per_k, min_qty, max_qty } = req.body;
+      const { serviceId, price_per_k, min_qty, max_qty, upstream_service_id } = req.body;
       await db.run(`
         UPDATE services
-        SET price_per_k = ?, min_qty = ?, max_qty = ?
+        SET price_per_k = ?, min_qty = ?, max_qty = ?, upstream_service_id = ?
         WHERE id = ?
-      `, [parseFloat(price_per_k), parseInt(min_qty), parseInt(max_qty), serviceId]);
-      res.json({ message: "Service pricing and parameters updated successfully." });
+      `, [parseFloat(price_per_k), parseInt(min_qty), parseInt(max_qty), upstream_service_id || "", serviceId]);
+      res.json({ message: "Service pricing and SMM upstream details updated successfully." });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin deduct/remove balance
+  app.post("/api/admin/users/deduct-balance", authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const { userId, amount } = req.body;
+      const amt = parseFloat(amount);
+      if (isNaN(amt) || amt <= 0) {
+        res.status(400).json({ error: "Invalid amount. Must be a positive number." });
+        return;
+      }
+
+      const targetUser = await db.get("SELECT name, balance FROM users WHERE id = ?", [userId]);
+      if (!targetUser) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      await db.run("UPDATE users SET balance = MAX(0.0, balance - ?) WHERE id = ?", [amt, userId]);
+      res.json({ message: `Successfully deducted Rs. ${amt.toFixed(2)} from ${targetUser.name}'s balance.` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Admin send order to Upstream SMM API
+  app.post("/api/admin/orders/send-upstream", authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const { orderId } = req.body;
+      
+      const order = await db.get("SELECT * FROM orders WHERE id = ?", [orderId]);
+      if (!order) {
+        res.status(404).json({ error: "Order not found" });
+        return;
+      }
+
+      const service = await db.get("SELECT * FROM services WHERE id = ?", [order.service_id]);
+      if (!service) {
+        res.status(404).json({ error: "Associated service not found" });
+        return;
+      }
+
+      if (!service.upstream_service_id) {
+        res.status(400).json({ error: "SMM Upstream Service ID is not configured for this service catalog item yet. Please set it in Service Prices tab." });
+        return;
+      }
+
+      // Fetch Upstream URL and Key from settings
+      const smmUrlSetting = await db.get("SELECT value FROM settings WHERE key = 'smm_api_url'");
+      const smmKeySetting = await db.get("SELECT value FROM settings WHERE key = 'system_api_key'");
+
+      const apiUrl = smmUrlSetting ? smmUrlSetting.value : "";
+      const apiKey = smmKeySetting ? smmKeySetting.value : "";
+
+      if (!apiUrl || !apiKey || apiKey === "DEFAULT_SYSTEM_API_KEY") {
+        res.status(400).json({ error: "Upstream SMM Panel API settings are incomplete or not set yet. Please configure them in Settings tab." });
+        return;
+      }
+
+      // Prepare payload to SMM Panel (usually based on key, action, service, link, quantity)
+      const params = new URLSearchParams();
+      params.append("key", apiKey);
+      params.append("action", "add");
+      params.append("service", service.upstream_service_id);
+      params.append("link", order.link);
+      params.append("quantity", String(order.quantity));
+
+      console.log(`Sending order #${orderId} to upstream SMM: ${apiUrl} with service ID ${service.upstream_service_id}`);
+
+      // Call the external SMM panel API
+      const upstreamRes = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.toString(),
+      });
+
+      const responseText = await upstreamRes.text();
+      let responseJson: any = null;
+      try {
+        responseJson = JSON.parse(responseText);
+      } catch (e) {
+        // Not a JSON response
+      }
+
+      // If successful standard SMM API returns e.g. { order: 12345 } or { order: "12345" }
+      if (responseJson && responseJson.order) {
+        const upstreamOrderId = String(responseJson.order);
+        await db.run(
+          "UPDATE orders SET api_order_id = ?, api_response = ?, status = 'In Progress' WHERE id = ?",
+          [upstreamOrderId, JSON.stringify(responseJson), orderId]
+        );
+        res.json({
+          success: true,
+          message: `Order sent successfully to SMM Panel! Upstream Order ID: #${upstreamOrderId}`,
+          apiOrderId: upstreamOrderId,
+          apiResponse: responseJson
+        });
+      } else {
+        // Log SMM Panel error
+        const errMsg = responseJson && responseJson.error ? responseJson.error : responseText || "Unknown SMM response";
+        await db.run(
+          "UPDATE orders SET api_response = ? WHERE id = ?",
+          [`Error: ${errMsg}`.substring(0, 500), orderId]
+        );
+        res.status(400).json({
+          error: `Upstream SMM Panel returned an error: ${errMsg}`
+        });
+      }
+
+    } catch (err: any) {
+      res.status(500).json({ error: `Network/API connection failure: ${err.message}` });
     }
   });
 
 
   // --- DEV & ASSETS / SPA FALLBACK ---
 
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+  if (!process.env.VERCEL) {
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`[KoSh Vote Software Server] Server listening on http://0.0.0.0:${PORT}`);
     });
   }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[KoSh Vote Software Server] Server listening on http://0.0.0.0:${PORT}`);
-  });
 }
 
 startServer().catch((error) => {
   console.error("Failed to start KoSh Vote Software Server:", error);
 });
+
+export default app;
