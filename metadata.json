@@ -1,0 +1,6 @@
+{
+  "name": "KoSh Vote Software",
+  "description": "A highly sophisticated premium SMM and online WhatsApp polling voting panel built for rapid automated services, payment tracking via JazzCash, and comprehensive admin controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

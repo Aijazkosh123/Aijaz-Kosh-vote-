@@ -1,0 +1,1055 @@
+import React, { useState, useEffect } from "react";
+import { Users, CreditCard, ShoppingBag, Settings, Check, X, ShieldAlert, Edit, Trash2, Shield, Search, RefreshCw, Ban, UserCheck, DollarSign } from "lucide-react";
+import { User, Order, Payment, Service, SystemSettings } from "../types";
+
+interface AdminDashboardProps {
+  token: string;
+  onRefreshUserBalance: () => void;
+}
+
+export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDashboardProps) {
+  const [adminTab, setAdminTab] = useState<"users" | "payments" | "orders" | "services" | "settings">("users");
+
+  // State
+  const [users, setUsers] = useState<User[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [settings, setSettings] = useState<SystemSettings>({
+    jazzcash_number: "03077321978",
+    jazzcash_name: "KoSh Vote Software",
+  });
+
+  // Search / Filters
+  const [userSearch, setUserSearch] = useState("");
+  const [orderSearch, setOrderSearch] = useState("");
+  
+  // Modals / Selected Items for actions
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [balanceAdjustment, setBalanceAdjustment] = useState("");
+  const [editingService, setEditingService] = useState<Service | null>(null);
+  
+  // Loading & Messages
+  const [loading, setLoading] = useState(false);
+  const [adminError, setAdminError] = useState("");
+  const [adminSuccess, setAdminSuccess] = useState("");
+
+  const clearMessages = () => {
+    setAdminError("");
+    setAdminSuccess("");
+  };
+
+  // --- API CALLS ---
+
+  const fetchUsers = async () => {
+    try {
+      const res = await fetch("/api/admin/users", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setUsers(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchPayments = async () => {
+    try {
+      const res = await fetch("/api/admin/payments", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setPayments(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch("/api/admin/orders", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setOrders(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchServices = async () => {
+    try {
+      const res = await fetch("/api/services");
+      if (res.ok) {
+        setServices(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch("/api/admin/settings", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        setSettings(await res.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const refreshAllAdminData = async () => {
+    setLoading(true);
+    await Promise.all([
+      fetchUsers(),
+      fetchPayments(),
+      fetchOrders(),
+      fetchServices(),
+      fetchSettings(),
+    ]);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    refreshAllAdminData();
+  }, [adminTab]);
+
+  // Handle Add Balance
+  const handleAddBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedUser || !balanceAdjustment) return;
+    clearMessages();
+
+    try {
+      const res = await fetch("/api/admin/users/add-balance", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          userId: selectedUser.id,
+          amount: parseFloat(balanceAdjustment),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to adjust balance");
+
+      setAdminSuccess(data.message);
+      setBalanceAdjustment("");
+      setSelectedUser(null);
+      fetchUsers();
+      onRefreshUserBalance(); // Refresh own balance if admin modified themselves
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Block/Unblock User
+  const handleToggleBlock = async (user: User) => {
+    clearMessages();
+    const newBlockedState = user.is_blocked === 0;
+
+    try {
+      const res = await fetch("/api/admin/users/block", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          isBlocked: newBlockedState,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to change user block status");
+
+      setAdminSuccess(data.message);
+      fetchUsers();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Remove User
+  const handleRemoveUser = async (userId: number) => {
+    if (!confirm("Are you sure you want to permanently delete this user? This removes all of their orders and payments history as well.")) return;
+    clearMessages();
+
+    try {
+      const res = await fetch("/api/admin/users/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ userId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove user");
+
+      setAdminSuccess(data.message);
+      fetchUsers();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Approve Deposit Payment
+  const handleApprovePayment = async (paymentId: number) => {
+    clearMessages();
+    try {
+      const res = await fetch("/api/admin/payments/approve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ paymentId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to approve deposit");
+
+      setAdminSuccess(data.message);
+      fetchPayments();
+      fetchUsers();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Reject Deposit Payment
+  const handleRejectPayment = async (paymentId: number) => {
+    clearMessages();
+    try {
+      const res = await fetch("/api/admin/payments/reject", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ paymentId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to reject deposit");
+
+      setAdminSuccess(data.message);
+      fetchPayments();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Update Order Status
+  const handleUpdateOrderStatus = async (orderId: number, status: string) => {
+    clearMessages();
+    try {
+      const res = await fetch("/api/admin/orders/update-status", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ orderId, status }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update order status");
+
+      setAdminSuccess(data.message);
+      fetchOrders();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Save Service Details / Price
+  const handleUpdateServicePrice = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingService) return;
+    clearMessages();
+
+    try {
+      const res = await fetch("/api/admin/services/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          serviceId: editingService.id,
+          price_per_k: editingService.price_per_k,
+          min_qty: editingService.min_qty,
+          max_qty: editingService.max_qty,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update service");
+
+      setAdminSuccess(data.message);
+      setEditingService(null);
+      fetchServices();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Update System Settings
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    clearMessages();
+
+    try {
+      const res = await fetch("/api/admin/settings/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ settings }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to save settings");
+
+      setAdminSuccess(data.message);
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Search filtration
+  const filteredUsers = users.filter(u =>
+    u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
+    u.email.toLowerCase().includes(userSearch.toLowerCase())
+  );
+
+  const filteredOrders = orders.filter(o =>
+    String(o.id).includes(orderSearch) ||
+    o.link.toLowerCase().includes(orderSearch.toLowerCase()) ||
+    (o.user_name && o.user_name.toLowerCase().includes(orderSearch.toLowerCase()))
+  );
+
+  return (
+    <div id="admin-dashboard-wrapper" className="max-w-7xl mx-auto px-4 py-8">
+      
+      {/* Admin Title Block */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2.5">
+            <Shield className="w-6 h-6 text-indigo-400" />
+            KoSh Vote Software — Administrator Panel
+          </h1>
+          <p className="text-sm text-slate-400 mt-1">
+            Perform administrative control of user wallets, pending deposits, automatic SMM orders, and catalog pricing.
+          </p>
+        </div>
+        
+        {/* Sync trigger button */}
+        <button
+          id="admin-sync-button"
+          onClick={refreshAllAdminData}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition-all cursor-pointer font-medium text-xs self-start md:self-auto"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <span>Sync Data Logs</span>
+        </button>
+      </div>
+
+      {/* Admin Quick stats summaries */}
+      <div id="admin-stats-bento" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        
+        {/* Total Users */}
+        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <span className="text-[10px] uppercase text-slate-500 font-mono">Total Clients</span>
+            <strong className="text-2xl font-bold text-white block mt-1">{users.length}</strong>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+            <Users className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Total SMM Orders */}
+        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <span className="text-[10px] uppercase text-slate-500 font-mono">Total Orders Logs</span>
+            <strong className="text-2xl font-bold text-white block mt-1">{orders.length}</strong>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-400">
+            <ShoppingBag className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Pending deposits count */}
+        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <span className="text-[10px] uppercase text-slate-500 font-mono">Pending Deposits</span>
+            <strong className="text-2xl font-bold text-amber-400 block mt-1">
+              {payments.filter(p => p.status === "Pending").length}
+            </strong>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400">
+            <CreditCard className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Total Client Funds */}
+        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <span className="text-[10px] uppercase text-slate-500 font-mono">Total Client Liabilities</span>
+            <strong className="text-2xl font-bold text-emerald-400 block mt-1 font-mono">
+              Rs. {users.reduce((acc, curr) => acc + curr.balance, 0).toFixed(0)}
+            </strong>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+            <DollarSign className="w-5 h-5" />
+          </div>
+        </div>
+
+      </div>
+
+      {/* Admin Tab Switcher */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-4 mb-8">
+        <button
+          id="admin-tab-users"
+          onClick={() => setAdminTab("users")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+            adminTab === "users" ? "bg-indigo-600 text-white shadow-lg" : "bg-slate-900/40 text-slate-400 hover:text-white"
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>User Panel ({users.length})</span>
+        </button>
+
+        <button
+          id="admin-tab-payments"
+          onClick={() => setAdminTab("payments")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+            adminTab === "payments" ? "bg-indigo-600 text-white shadow-lg" : "bg-slate-900/40 text-slate-400 hover:text-white"
+          }`}
+        >
+          <CreditCard className="w-3.5 h-3.5" />
+          <span>Pending Payments ({payments.filter(p => p.status === "Pending").length})</span>
+        </button>
+
+        <button
+          id="admin-tab-orders"
+          onClick={() => setAdminTab("orders")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+            adminTab === "orders" ? "bg-indigo-600 text-white shadow-lg" : "bg-slate-900/40 text-slate-400 hover:text-white"
+          }`}
+        >
+          <ShoppingBag className="w-3.5 h-3.5" />
+          <span>Auto Orders ({orders.length})</span>
+        </button>
+
+        <button
+          id="admin-tab-services"
+          onClick={() => setAdminTab("services")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+            adminTab === "services" ? "bg-indigo-600 text-white shadow-lg" : "bg-slate-900/40 text-slate-400 hover:text-white"
+          }`}
+        >
+          <Settings className="w-3.5 h-3.5" />
+          <span>Service Prices ({services.length})</span>
+        </button>
+
+        <button
+          id="admin-tab-settings"
+          onClick={() => setAdminTab("settings")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+            adminTab === "settings" ? "bg-indigo-600 text-white shadow-lg" : "bg-slate-900/40 text-slate-400 hover:text-white"
+          }`}
+        >
+          <Settings className="w-3.5 h-3.5" />
+          <span>JazzCash Settings</span>
+        </button>
+      </div>
+
+      {/* Message Notifications */}
+      {adminError && (
+        <div id="admin-error-banner" className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-start gap-3 text-sm max-w-3xl">
+          <ShieldAlert className="w-5 h-5 shrink-0 mt-0.5" />
+          <span>{adminError}</span>
+        </div>
+      )}
+
+      {adminSuccess && (
+        <div id="admin-success-banner" className="mb-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-start gap-3 text-sm max-w-3xl">
+          <Check className="w-5 h-5 shrink-0 mt-0.5" />
+          <span>{adminSuccess}</span>
+        </div>
+      )}
+
+      {/* --- ADMIN TAB: USER CONTROL PANEL --- */}
+      {adminTab === "users" && (
+        <div id="admin-users-panel" className="space-y-6">
+          
+          {/* Filters */}
+          <div className="flex items-center gap-3 max-w-md bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5">
+            <Search className="w-4 h-4 text-slate-500" />
+            <input
+              id="admin-user-search-input"
+              type="text"
+              placeholder="Search user by name or email..."
+              className="bg-transparent border-none outline-none text-xs text-slate-200 placeholder-slate-600 w-full"
+              value={userSearch}
+              onChange={(e) => setUserSearch(e.target.value)}
+            />
+          </div>
+
+          {/* Users List */}
+          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
+                    <th className="py-3.5 px-4 font-normal">Client ID</th>
+                    <th className="py-3.5 px-4 font-normal">Name</th>
+                    <th className="py-3.5 px-4 font-normal">Email</th>
+                    <th className="py-3.5 px-4 font-normal text-right">Balance</th>
+                    <th className="py-3.5 px-4 font-normal text-center">Status</th>
+                    <th className="py-3.5 px-4 font-normal">Last Online</th>
+                    <th className="py-3.5 px-4 font-normal text-center">Control Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-850 text-slate-300">
+                  {filteredUsers.map((u) => (
+                    <tr key={u.id} className="hover:bg-slate-950/20 transition-colors">
+                      <td className="py-3 px-4 font-mono text-slate-500">#{u.id}</td>
+                      <td className="py-3 px-4">
+                        <span className="font-semibold text-slate-200">{u.name}</span>
+                        {u.is_admin === 1 && (
+                          <span className="ml-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-400 border border-indigo-500/20">
+                            Admin
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-slate-400 font-mono">{u.email}</td>
+                      <td className="py-3 px-4 text-right font-mono font-bold text-white">Rs. {u.balance.toFixed(2)}</td>
+                      <td className="py-3 px-4 text-center">
+                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
+                          u.is_blocked === 1
+                            ? "bg-red-500/10 text-red-400 border border-red-500/25"
+                            : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/25"
+                        }`}>
+                          {u.is_blocked === 1 ? "Suspended" : "Active"}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-slate-500">
+                        {u.last_seen ? new Date(u.last_seen).toLocaleString() : "Never"}
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          
+                          {/* Add Balance CTA */}
+                          <button
+                            id={`add-balance-user-${u.id}`}
+                            onClick={() => {
+                              setSelectedUser(u);
+                              setBalanceAdjustment("");
+                            }}
+                            className="px-2.5 py-1.5 rounded bg-indigo-600/15 text-indigo-400 hover:bg-indigo-600 hover:text-white transition-all text-[10px] font-semibold cursor-pointer"
+                            title="Add/Deduct Balance"
+                          >
+                            Add Funds
+                          </button>
+
+                          {/* Block/Unblock CTA */}
+                          {u.is_admin === 0 && (
+                            <button
+                              id={`block-user-${u.id}`}
+                              onClick={() => handleToggleBlock(u)}
+                              className={`p-1.5 rounded transition-all cursor-pointer border ${
+                                u.is_blocked === 1
+                                  ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500 hover:text-white"
+                                  : "bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500 hover:text-white"
+                              }`}
+                              title={u.is_blocked === 1 ? "Activate Client" : "Suspend Client"}
+                            >
+                              {u.is_blocked === 1 ? <UserCheck className="w-3.5 h-3.5" /> : <Ban className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+
+                          {/* Delete CTA */}
+                          {u.is_admin === 0 && (
+                            <button
+                              id={`delete-user-${u.id}`}
+                              onClick={() => handleRemoveUser(u.id)}
+                              className="p-1.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-600 hover:text-white transition-all cursor-pointer"
+                              title="Delete Permanently"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Pop-up Overlay Modal: Add/Deduct Balance */}
+          {selectedUser && (
+            <div id="add-balance-modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+              <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+                <button
+                  id="close-balance-modal"
+                  onClick={() => setSelectedUser(null)}
+                  className="absolute top-4 right-4 text-slate-500 hover:text-slate-300"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                <h3 className="text-lg font-bold text-white mb-2">Adjust Client Funds</h3>
+                <p className="text-xs text-slate-400 mb-6">
+                  Adjust balance for <strong>{selectedUser.name}</strong> ({selectedUser.email}). Currently has: <strong className="text-white font-mono">Rs. {selectedUser.balance.toFixed(2)}</strong>.
+                </p>
+
+                <form onSubmit={handleAddBalance} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                      Amount (Use negative to deduct, e.g. -150)
+                    </label>
+                    <input
+                      id="balance-adjustment-input"
+                      type="number"
+                      required
+                      step="any"
+                      placeholder="e.g. 500"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={balanceAdjustment}
+                      onChange={(e) => setBalanceAdjustment(e.target.value)}
+                    />
+                  </div>
+
+                  <button
+                    id="balance-adjustment-submit"
+                    type="submit"
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-3 px-4 rounded-xl shadow-lg transition-colors cursor-pointer"
+                  >
+                    Apply Balance Change
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* --- ADMIN TAB: PENDING PAYMENTS (DEPOSITS RECONCILIATION) --- */}
+      {adminTab === "payments" && (
+        <div id="admin-payments-panel" className="space-y-6">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <CreditCard className="w-5 h-5 text-indigo-400" />
+            JazzCash Payment Deposits Verification Panel
+          </h2>
+
+          {payments.length === 0 ? (
+            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl py-12 text-center text-slate-500 text-sm">
+              No deposit receipts submitted in the database logs.
+            </div>
+          ) : (
+            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
+                      <th className="py-3.5 px-4 font-normal">Payment ID</th>
+                      <th className="py-3.5 px-4 font-normal">Client</th>
+                      <th className="py-3.5 px-4 font-normal">Trx ID</th>
+                      <th className="py-3.5 px-4 font-normal text-right">Amount</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Receipt Screenshot</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Status</th>
+                      <th className="py-3.5 px-4 font-normal">Submitted Date</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Decisions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-850 text-slate-300">
+                    {payments.map((p) => (
+                      <tr key={p.id} className="hover:bg-slate-950/20 transition-colors">
+                        <td className="py-3 px-4 font-mono text-slate-500">#{p.id}</td>
+                        <td className="py-3 px-4">
+                          <span className="font-semibold text-slate-200 block">{p.user_name}</span>
+                          <span className="text-[10px] text-slate-500 font-mono">{p.user_email}</span>
+                        </td>
+                        <td className="py-3 px-4 font-mono font-semibold text-indigo-300 select-all">{p.trx_id}</td>
+                        <td className="py-3 px-4 text-right font-mono text-white font-bold">Rs. {p.amount.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-center">
+                          {p.screenshot ? (
+                            <a
+                              href={p.screenshot}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-block"
+                            >
+                              <img
+                                src={p.screenshot}
+                                alt="screenshot receipt thumbnail"
+                                className="w-10 h-10 object-cover rounded-lg border border-slate-800 hover:scale-150 transition-all cursor-zoom-in"
+                                referrerPolicy="no-referrer"
+                              />
+                            </a>
+                          ) : (
+                            <span className="text-slate-600">No image</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
+                            p.status === "Approved"
+                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                              : p.status === "Rejected"
+                              ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                              : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                          }`}>
+                            {p.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-500">
+                          {new Date(p.created_at).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {p.status === "Pending" ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <button
+                                id={`approve-payment-${p.id}`}
+                                onClick={() => handleApprovePayment(p.id)}
+                                className="p-1 px-2 rounded bg-emerald-600 text-white hover:bg-emerald-500 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <Check className="w-3 h-3" /> Approve
+                              </button>
+                              <button
+                                id={`reject-payment-${p.id}`}
+                                onClick={() => handleRejectPayment(p.id)}
+                                className="p-1 px-2 rounded bg-red-600 text-white hover:bg-red-500 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                              >
+                                <X className="w-3 h-3" /> Reject
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-slate-500 text-xs">Processed</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* --- ADMIN TAB: AUTO ORDER MANAGER --- */}
+      {adminTab === "orders" && (
+        <div id="admin-orders-panel" className="space-y-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <ShoppingBag className="w-5 h-5 text-indigo-400" />
+              SMM Auto-Orders Administration
+            </h2>
+
+            {/* Filter Search */}
+            <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 w-full max-w-sm">
+              <Search className="w-4 h-4 text-slate-500" />
+              <input
+                id="admin-order-search-input"
+                type="text"
+                placeholder="Search orders, target links, IDs..."
+                className="bg-transparent border-none outline-none text-xs text-slate-200 placeholder-slate-600 w-full"
+                value={orderSearch}
+                onChange={(e) => setOrderSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {orders.length === 0 ? (
+            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl py-12 text-center text-slate-500 text-sm">
+              No auto orders registered in the system database yet.
+            </div>
+          ) : (
+            <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-xl">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
+                      <th className="py-3.5 px-4 font-normal">Order ID</th>
+                      <th className="py-3.5 px-4 font-normal">Client</th>
+                      <th className="py-3.5 px-4 font-normal">Service Catalog</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Vote Option</th>
+                      <th className="py-3.5 px-4 font-normal">Target link</th>
+                      <th className="py-3.5 px-4 font-normal text-right">Quantity</th>
+                      <th className="py-3.5 px-4 font-normal text-right">Charge</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Order Status</th>
+                      <th className="py-3.5 px-4 font-normal">Placed Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-850 text-slate-300">
+                    {filteredOrders.map((ord) => (
+                      <tr key={ord.id} className="hover:bg-slate-950/20 transition-colors">
+                        <td className="py-3 px-4 font-mono text-slate-500">#{ord.id}</td>
+                        <td className="py-3 px-4 font-semibold text-slate-200">
+                          {ord.user_name}
+                          <span className="text-[10px] text-slate-500 font-mono block font-normal">{ord.user_email}</span>
+                        </td>
+                        <td className="py-3 px-4 text-slate-200">
+                          <span className="font-semibold block">{ord.service_name}</span>
+                          <span className="text-[10px] text-slate-500 font-mono">{ord.service_category}</span>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {ord.voting_option ? (
+                            <span className="px-2 py-1 rounded bg-indigo-500/10 text-indigo-400 font-mono font-bold text-xs">
+                              {ord.voting_option}
+                            </span>
+                          ) : (
+                            <span className="text-slate-600">-</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 font-mono truncate max-w-[200px]" title={ord.link}>
+                          <a href={ord.link} target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline">
+                            {ord.link}
+                          </a>
+                        </td>
+                        <td className="py-3 px-4 text-right font-mono font-semibold">{ord.quantity.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-right font-mono text-white">Rs. {ord.charge.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-center">
+                          <select
+                            id={`status-select-order-${ord.id}`}
+                            className="bg-slate-950 border border-slate-850 text-[10px] font-bold uppercase rounded p-1 outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+                            value={ord.status}
+                            onChange={(e) => handleUpdateOrderStatus(ord.id, e.target.value)}
+                          >
+                            <option value="Pending">Pending</option>
+                            <option value="In Progress">In Progress</option>
+                            <option value="Completed">Completed</option>
+                            <option value="Cancelled">Cancelled</option>
+                          </select>
+                        </td>
+                        <td className="py-3 px-4 text-slate-500">
+                          {new Date(ord.created_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* --- ADMIN TAB: SERVICE PRICE CONFIGURATOR --- */}
+      {adminTab === "services" && (
+        <div id="admin-services-panel" className="space-y-6">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <Settings className="w-5 h-5 text-indigo-400" />
+            SMM & WhatsApp Vote Service Pricing Control
+          </h2>
+
+          <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-xl">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
+                    <th className="py-3.5 px-4 font-normal">Service ID</th>
+                    <th className="py-3.5 px-4 font-normal">Category</th>
+                    <th className="py-3.5 px-4 font-normal">Service Description</th>
+                    <th className="py-3.5 px-4 font-normal text-right">Price Per 1,000</th>
+                    <th className="py-3.5 px-4 font-normal text-right">Min Order Limit</th>
+                    <th className="py-3.5 px-4 font-normal text-right">Max Order Limit</th>
+                    <th className="py-3.5 px-4 font-normal text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-850 text-slate-300">
+                  {services.map((s) => (
+                    <tr key={s.id} className="hover:bg-slate-950/20 transition-colors">
+                      <td className="py-3.5 px-4 font-mono text-slate-500">#{s.id}</td>
+                      <td className="py-3.5 px-4 text-indigo-400 font-mono font-semibold">{s.category}</td>
+                      <td className="py-3.5 px-4 font-semibold text-slate-200">{s.name}</td>
+                      <td className="py-3.5 px-4 text-right font-mono font-bold text-white">Rs. {s.price_per_k.toFixed(2)}</td>
+                      <td className="py-3.5 px-4 text-right font-mono">{s.min_qty.toLocaleString()}</td>
+                      <td className="py-3.5 px-4 text-right font-mono">{s.max_qty.toLocaleString()}</td>
+                      <td className="py-3.5 px-4 text-center">
+                        <button
+                          id={`edit-service-${s.id}`}
+                          onClick={() => setEditingService(s)}
+                          className="p-1 px-2.5 rounded bg-slate-850 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-400 border border-slate-800 hover:border-indigo-500/20 transition-all cursor-pointer text-[10px]"
+                        >
+                          Change Price
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Service Pricing Edit Modal Popup */}
+          {editingService && (
+            <div id="edit-service-modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+              <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+                <button
+                  id="close-service-modal"
+                  onClick={() => setEditingService(null)}
+                  className="absolute top-4 right-4 text-slate-500 hover:text-slate-300"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                <h3 className="text-lg font-bold text-white mb-2">Configure SMM Service Price</h3>
+                <p className="text-xs text-slate-400 mb-6">
+                  Modifying specifications for: <strong className="text-indigo-400">{editingService.name}</strong>
+                </p>
+
+                <form onSubmit={handleUpdateServicePrice} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                      Price Per 1,000 Votes/Orders (PKR)
+                    </label>
+                    <input
+                      id="edit-service-price-input"
+                      type="number"
+                      required
+                      step="any"
+                      placeholder="Price per K"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={editingService.price_per_k}
+                      onChange={(e) => setEditingService({ ...editingService, price_per_k: parseFloat(e.target.value) || 0 })}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                        Min Quantity
+                      </label>
+                      <input
+                        id="edit-service-min-qty"
+                        type="number"
+                        required
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                        value={editingService.min_qty}
+                        onChange={(e) => setEditingService({ ...editingService, min_qty: parseInt(e.target.value) || 0 })}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                        Max Quantity
+                      </label>
+                      <input
+                        id="edit-service-max-qty"
+                        type="number"
+                        required
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                        value={editingService.max_qty}
+                        onChange={(e) => setEditingService({ ...editingService, max_qty: parseInt(e.target.value) || 0 })}
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    id="edit-service-submit"
+                    type="submit"
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-3 px-4 rounded-xl shadow-lg transition-colors cursor-pointer"
+                  >
+                    Save Service Changes
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* --- ADMIN TAB: SYSTEM SETTINGS (JAZZCASH / PROVIDER API KEY) --- */}
+      {adminTab === "settings" && (
+        <div id="admin-settings-panel" className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 sm:p-8 backdrop-blur-xl max-w-2xl mx-auto">
+          <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+            <Settings className="w-5 h-5 text-indigo-400" />
+            Global JazzCash & Upstream API Settings
+          </h2>
+          <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+            Update the mobile payment details displayed to your clients during fund deposits, and set the system&apos;s upstream API provider token.
+          </p>
+
+          <form onSubmit={handleSaveSettings} className="space-y-5">
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                JazzCash Deposit Wallet Number
+              </label>
+              <input
+                id="admin-settings-jazzcash-number"
+                type="text"
+                required
+                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
+                value={settings.jazzcash_number}
+                onChange={(e) => setSettings({ ...settings, jazzcash_number: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                JazzCash Wallet Account Title Name
+              </label>
+              <input
+                id="admin-settings-jazzcash-name"
+                type="text"
+                required
+                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors"
+                value={settings.jazzcash_name}
+                onChange={(e) => setSettings({ ...settings, jazzcash_name: e.target.value })}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                Upstream Provider SMM API Key (Used to automatically trigger orders upstream)
+              </label>
+              <input
+                id="admin-settings-system-api-key"
+                type="text"
+                placeholder="Optional upstream API key"
+                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
+                value={settings.system_api_key || ""}
+                onChange={(e) => setSettings({ ...settings, system_api_key: e.target.value })}
+              />
+            </div>
+
+            <button
+              id="admin-settings-save-button"
+              type="submit"
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-2.5 px-6 rounded-xl shadow-lg transition-colors cursor-pointer"
+            >
+              Save Settings
+            </button>
+          </form>
+        </div>
+      )}
+
+    </div>
+  );
+}
