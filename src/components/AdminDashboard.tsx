@@ -18,7 +18,12 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
   const [settings, setSettings] = useState<SystemSettings>({
     jazzcash_number: "03077321978",
     jazzcash_name: "KoSh Vote Software",
+    easypaisa_number: "03077321978",
+    easypaisa_name: "KoSh Vote Software",
+    system_api_key: "",
+    smm_api_url: ""
   });
+  const [onlineUsers, setOnlineUsers] = useState<number>(1);
 
   // Search / Filters
   const [userSearch, setUserSearch] = useState("");
@@ -27,6 +32,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
   // Modals / Selected Items for actions
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [balanceAdjustment, setBalanceAdjustment] = useState("");
+  const [adjustmentMode, setAdjustmentMode] = useState<"add" | "deduct">("add");
   const [editingService, setEditingService] = useState<Service | null>(null);
   
   // Loading & Messages
@@ -104,6 +110,18 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     }
   };
 
+  const fetchOnlineUsers = async () => {
+    try {
+      const res = await fetch("/api/stats/online");
+      if (res.ok) {
+        const data = await res.json();
+        setOnlineUsers(data.onlineUsers || 1);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const refreshAllAdminData = async () => {
     setLoading(true);
     await Promise.all([
@@ -112,6 +130,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
       fetchOrders(),
       fetchServices(),
       fetchSettings(),
+      fetchOnlineUsers(),
     ]);
     setLoading(false);
   };
@@ -120,14 +139,28 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     refreshAllAdminData();
   }, [adminTab]);
 
-  // Handle Add Balance
-  const handleAddBalance = async (e: React.FormEvent) => {
+  useEffect(() => {
+    fetchOnlineUsers();
+    const timer = setInterval(fetchOnlineUsers, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Handle Balance adjustment (Add or Deduct)
+  const handleAdjustBalanceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedUser || !balanceAdjustment) return;
     clearMessages();
 
+    const amountNum = parseFloat(balanceAdjustment);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setAdminError("Please specify a valid positive numeric amount.");
+      return;
+    }
+
+    const endpoint = adjustmentMode === "add" ? "/api/admin/users/add-balance" : "/api/admin/users/deduct-balance";
+
     try {
-      const res = await fetch("/api/admin/users/add-balance", {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -135,7 +168,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
         },
         body: JSON.stringify({
           userId: selectedUser.id,
-          amount: parseFloat(balanceAdjustment),
+          amount: amountNum,
         }),
       });
 
@@ -275,6 +308,34 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     }
   };
 
+  // Handle sending order upstream to the SMM Panel API
+  const handleSendUpstream = async (orderId: number) => {
+    clearMessages();
+    setLoading(true);
+    try {
+      const res = await fetch("/api/admin/orders/send-upstream", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ orderId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to forward order upstream");
+      }
+
+      setAdminSuccess(data.message);
+      fetchOrders();
+    } catch (err: any) {
+      setAdminError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Handle Save Service Details / Price
   const handleUpdateServicePrice = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -293,6 +354,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
           price_per_k: editingService.price_per_k,
           min_qty: editingService.min_qty,
           max_qty: editingService.max_qty,
+          upstream_service_id: editingService.upstream_service_id || "",
         }),
       });
 
@@ -334,7 +396,8 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
   // Search filtration
   const filteredUsers = users.filter(u =>
     u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
-    u.email.toLowerCase().includes(userSearch.toLowerCase())
+    (u.mobile && u.mobile.toLowerCase().includes(userSearch.toLowerCase())) ||
+    (u.email && u.email.toLowerCase().includes(userSearch.toLowerCase()))
   );
 
   const filteredOrders = orders.filter(o =>
@@ -371,52 +434,71 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
       </div>
 
       {/* Admin Quick stats summaries */}
-      <div id="admin-stats-bento" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+      <div id="admin-stats-bento" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
         
         {/* Total Users */}
-        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+        <div className="glass p-5 rounded-2xl flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase text-slate-500 font-mono">Total Clients</span>
-            <strong className="text-2xl font-bold text-white block mt-1">{users.length}</strong>
+            <span className="text-[10px] uppercase text-gray-500 font-mono font-bold">Total Clients</span>
+            <strong className="text-2xl font-black text-white block mt-1">{users.length}</strong>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <Users className="w-5 h-5" />
           </div>
         </div>
 
         {/* Total SMM Orders */}
-        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+        <div className="glass p-5 rounded-2xl flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase text-slate-500 font-mono">Total Orders Logs</span>
-            <strong className="text-2xl font-bold text-white block mt-1">{orders.length}</strong>
+            <span className="text-[10px] uppercase text-gray-500 font-mono font-bold">Orders Logged</span>
+            <strong className="text-2xl font-black text-white block mt-1">{orders.length}</strong>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-400">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
             <ShoppingBag className="w-5 h-5" />
           </div>
         </div>
 
         {/* Pending deposits count */}
-        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+        <div className="glass p-5 rounded-2xl flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase text-slate-500 font-mono">Pending Deposits</span>
-            <strong className="text-2xl font-bold text-amber-400 block mt-1">
+            <span className="text-[10px] uppercase text-gray-500 font-mono font-bold">Pending Deposits</span>
+            <strong className="text-2xl font-black text-amber-400 block mt-1">
               {payments.filter(p => p.status === "Pending").length}
             </strong>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-400">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
             <CreditCard className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Total Client Funds */}
-        <div className="bg-slate-900/40 border border-slate-800 p-5 rounded-2xl flex items-center justify-between">
+        {/* Online Active check (Real-time monitoring) */}
+        <div className="glass p-5 rounded-2xl flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase text-slate-500 font-mono">Total Client Liabilities</span>
-            <strong className="text-2xl font-bold text-emerald-400 block mt-1 font-mono">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase text-gray-500 font-mono font-bold">Online Now</span>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+            </div>
+            <strong className="text-2xl font-black text-emerald-400 block mt-1">
+              {onlineUsers} <span className="text-xs text-gray-500 font-bold font-sans">Active</span>
+            </strong>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+            <Shield className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Total Client Funds */}
+        <div className="glass p-5 rounded-2xl flex items-center justify-between">
+          <div>
+            <span className="text-[10px] uppercase text-gray-500 font-mono font-bold">Clients Balance</span>
+            <strong className="text-2xl font-black text-white block mt-1 font-mono">
               Rs. {users.reduce((acc, curr) => acc + curr.balance, 0).toFixed(0)}
             </strong>
           </div>
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <DollarSign className="w-5 h-5" />
           </div>
         </div>
@@ -477,7 +559,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
           }`}
         >
           <Settings className="w-3.5 h-3.5" />
-          <span>JazzCash Settings</span>
+          <span>System Settings</span>
         </button>
       </div>
 
@@ -506,7 +588,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
             <input
               id="admin-user-search-input"
               type="text"
-              placeholder="Search user by name or email..."
+              placeholder="Search user by name or mobile..."
               className="bg-transparent border-none outline-none text-xs text-slate-200 placeholder-slate-600 w-full"
               value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)}
@@ -521,7 +603,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                   <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
                     <th className="py-3.5 px-4 font-normal">Client ID</th>
                     <th className="py-3.5 px-4 font-normal">Name</th>
-                    <th className="py-3.5 px-4 font-normal">Email</th>
+                    <th className="py-3.5 px-4 font-normal">Mobile Number</th>
                     <th className="py-3.5 px-4 font-normal text-right">Balance</th>
                     <th className="py-3.5 px-4 font-normal text-center">Status</th>
                     <th className="py-3.5 px-4 font-normal">Last Online</th>
@@ -540,7 +622,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-slate-400 font-mono">{u.email}</td>
+                      <td className="py-3 px-4 text-slate-400 font-mono">{u.mobile || u.email}</td>
                       <td className="py-3 px-4 text-right font-mono font-bold text-white">Rs. {u.balance.toFixed(2)}</td>
                       <td className="py-3 px-4 text-center">
                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
@@ -610,32 +692,61 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
           {/* Pop-up Overlay Modal: Add/Deduct Balance */}
           {selectedUser && (
             <div id="add-balance-modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
-              <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+              <div className="w-full max-w-md bg-slate-900 border border-white/10 rounded-2xl p-6 shadow-2xl relative">
                 <button
                   id="close-balance-modal"
                   onClick={() => setSelectedUser(null)}
-                  className="absolute top-4 right-4 text-slate-500 hover:text-slate-300"
+                  className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
 
-                <h3 className="text-lg font-bold text-white mb-2">Adjust Client Funds</h3>
+                <h3 className="text-lg font-bold text-white mb-1 uppercase tracking-tight">Adjust Client Funds</h3>
                 <p className="text-xs text-slate-400 mb-6">
-                  Adjust balance for <strong>{selectedUser.name}</strong> ({selectedUser.email}). Currently has: <strong className="text-white font-mono">Rs. {selectedUser.balance.toFixed(2)}</strong>.
+                  Managing wallet for <strong className="text-white">{selectedUser.name}</strong> ({selectedUser.mobile || selectedUser.email}).
+                  <br />
+                  Current Balance: <strong className="text-emerald-400 font-mono text-xs">Rs. {selectedUser.balance.toFixed(2)}</strong>
                 </p>
 
-                <form onSubmit={handleAddBalance} className="space-y-4">
+                {/* Switcher Mode Tab */}
+                <div className="grid grid-cols-2 gap-2 bg-black/40 p-1.5 rounded-xl border border-white/5 mb-5">
+                  <button
+                    type="button"
+                    onClick={() => setAdjustmentMode("add")}
+                    className={`py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      adjustmentMode === "add"
+                        ? "bg-indigo-600 text-white shadow"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Add Balance
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjustmentMode("deduct")}
+                    className={`py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      adjustmentMode === "deduct"
+                        ? "bg-rose-600 text-white shadow"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    Deduct Balance
+                  </button>
+                </div>
+
+                <form onSubmit={handleAdjustBalanceSubmit} className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                      Amount (Use negative to deduct, e.g. -150)
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                      {adjustmentMode === "add" ? "Amount to Add (PKR)" : "Amount to Deduct (PKR)"}
                     </label>
                     <input
                       id="balance-adjustment-input"
                       type="number"
                       required
+                      min="0.01"
                       step="any"
                       placeholder="e.g. 500"
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
                       value={balanceAdjustment}
                       onChange={(e) => setBalanceAdjustment(e.target.value)}
                     />
@@ -644,9 +755,13 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                   <button
                     id="balance-adjustment-submit"
                     type="submit"
-                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-3 px-4 rounded-xl shadow-lg transition-colors cursor-pointer"
+                    className={`w-full text-white font-bold text-xs uppercase tracking-wider py-3 px-4 rounded-xl shadow-lg transition-all cursor-pointer ${
+                      adjustmentMode === "add"
+                        ? "bg-indigo-600 hover:bg-indigo-500 hover:shadow-indigo-500/20"
+                        : "bg-rose-600 hover:bg-rose-500 hover:shadow-rose-500/20"
+                    }`}
                   >
-                    Apply Balance Change
+                    {adjustmentMode === "add" ? "Confirm Add Balance" : "Confirm Deduct Balance"}
                   </button>
                 </form>
               </div>
@@ -690,7 +805,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                         <td className="py-3 px-4 font-mono text-slate-500">#{p.id}</td>
                         <td className="py-3 px-4">
                           <span className="font-semibold text-slate-200 block">{p.user_name}</span>
-                          <span className="text-[10px] text-slate-500 font-mono">{p.user_email}</span>
+                          <span className="text-[10px] text-slate-500 font-mono">{p.user_mobile || p.user_email}</span>
                         </td>
                         <td className="py-3 px-4 font-mono font-semibold text-indigo-300 select-all">{p.trx_id}</td>
                         <td className="py-3 px-4 text-right font-mono text-white font-bold">Rs. {p.amount.toFixed(2)}</td>
@@ -801,6 +916,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                       <th className="py-3.5 px-4 font-normal text-right">Quantity</th>
                       <th className="py-3.5 px-4 font-normal text-right">Charge</th>
                       <th className="py-3.5 px-4 font-normal text-center">Order Status</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Upstream SMM</th>
                       <th className="py-3.5 px-4 font-normal">Placed Date</th>
                     </tr>
                   </thead>
@@ -810,11 +926,10 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                         <td className="py-3 px-4 font-mono text-slate-500">#{ord.id}</td>
                         <td className="py-3 px-4 font-semibold text-slate-200">
                           {ord.user_name}
-                          <span className="text-[10px] text-slate-500 font-mono block font-normal">{ord.user_email}</span>
+                          <span className="text-[10px] text-slate-500 font-mono block font-normal">{ord.user_mobile || ord.user_email}</span>
                         </td>
                         <td className="py-3 px-4 text-slate-200">
                           <span className="font-semibold block">{ord.service_name}</span>
-                          <span className="text-[10px] text-slate-500 font-mono">{ord.service_category}</span>
                         </td>
                         <td className="py-3 px-4 text-center">
                           {ord.voting_option ? (
@@ -845,6 +960,32 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                             <option value="Cancelled">Cancelled</option>
                           </select>
                         </td>
+                        <td className="py-3 px-4 text-center">
+                          <div className="flex flex-col items-center justify-center gap-1.5">
+                            {ord.api_order_id ? (
+                              <div className="flex flex-col items-center">
+                                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[9px] font-bold font-mono border border-emerald-500/15">
+                                  Sent: #{ord.api_order_id}
+                                </span>
+                                {ord.api_response && (
+                                  <span className="text-[8px] text-gray-500 font-mono block mt-0.5 truncate max-w-[110px]" title={ord.api_response}>
+                                    {ord.api_response}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleSendUpstream(ord.id)}
+                                disabled={loading}
+                                className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                              >
+                                <RefreshCw className={`w-2.5 h-2.5 ${loading ? 'animate-spin' : ''}`} />
+                                Push SMM
+                              </button>
+                            )}
+                          </div>
+                        </td>
                         <td className="py-3 px-4 text-slate-500">
                           {new Date(ord.created_at).toLocaleString()}
                         </td>
@@ -873,7 +1014,6 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
                     <th className="py-3.5 px-4 font-normal">Service ID</th>
-                    <th className="py-3.5 px-4 font-normal">Category</th>
                     <th className="py-3.5 px-4 font-normal">Service Description</th>
                     <th className="py-3.5 px-4 font-normal text-right">Price Per 1,000</th>
                     <th className="py-3.5 px-4 font-normal text-right">Min Order Limit</th>
@@ -885,7 +1025,6 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                   {services.map((s) => (
                     <tr key={s.id} className="hover:bg-slate-950/20 transition-colors">
                       <td className="py-3.5 px-4 font-mono text-slate-500">#{s.id}</td>
-                      <td className="py-3.5 px-4 text-indigo-400 font-mono font-semibold">{s.category}</td>
                       <td className="py-3.5 px-4 font-semibold text-slate-200">{s.name}</td>
                       <td className="py-3.5 px-4 text-right font-mono font-bold text-white">Rs. {s.price_per_k.toFixed(2)}</td>
                       <td className="py-3.5 px-4 text-right font-mono">{s.min_qty.toLocaleString()}</td>
@@ -949,7 +1088,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                         id="edit-service-min-qty"
                         type="number"
                         required
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
                         value={editingService.min_qty}
                         onChange={(e) => setEditingService({ ...editingService, min_qty: parseInt(e.target.value) || 0 })}
                       />
@@ -963,11 +1102,26 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                         id="edit-service-max-qty"
                         type="number"
                         required
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
                         value={editingService.max_qty}
                         onChange={(e) => setEditingService({ ...editingService, max_qty: parseInt(e.target.value) || 0 })}
                       />
                     </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                      Upstream Service ID (For SMM Provider Integration)
+                    </label>
+                    <input
+                      id="edit-service-upstream-id"
+                      type="text"
+                      placeholder="e.g. 4392"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
+                      value={editingService.upstream_service_id || ""}
+                      onChange={(e) => setEditingService({ ...editingService, upstream_service_id: e.target.value })}
+                    />
+                    <span className="text-[10px] text-gray-500 mt-1 block">Specify the exact Service ID from your connected SMM provider dashboard.</span>
                   </div>
 
                   <button
@@ -987,64 +1141,128 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
 
       {/* --- ADMIN TAB: SYSTEM SETTINGS (JAZZCASH / PROVIDER API KEY) --- */}
       {adminTab === "settings" && (
-        <div id="admin-settings-panel" className="bg-slate-900/40 border border-slate-800 rounded-2xl p-6 sm:p-8 backdrop-blur-xl max-w-2xl mx-auto">
-          <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
-            <Settings className="w-5 h-5 text-indigo-400" />
-            Global JazzCash & Upstream API Settings
-          </h2>
-          <p className="text-sm text-slate-400 mb-6 leading-relaxed">
-            Update the mobile payment details displayed to your clients during fund deposits, and set the system&apos;s upstream API provider token.
-          </p>
+        <div id="admin-settings-panel" className="glass rounded-2xl p-6 sm:p-8 backdrop-blur-xl max-w-2xl mx-auto space-y-6">
+          <div>
+            <h2 className="text-lg font-bold text-white mb-1 flex items-center gap-2 uppercase tracking-tight">
+              <Settings className="w-5 h-5 text-indigo-400" />
+              Global System Configuration
+            </h2>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Configure active JazzCash & Easypaisa payment details shown during user top-ups, and provide credentials for automatic upstream SMM order dispatching.
+            </p>
+          </div>
 
           <form onSubmit={handleSaveSettings} className="space-y-5">
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                JazzCash Deposit Wallet Number
-              </label>
-              <input
-                id="admin-settings-jazzcash-number"
-                type="text"
-                required
-                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
-                value={settings.jazzcash_number}
-                onChange={(e) => setSettings({ ...settings, jazzcash_number: e.target.value })}
-              />
+            
+            {/* JazzCash Section */}
+            <div className="p-4 bg-black/40 rounded-xl border border-white/5 space-y-4">
+              <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">JazzCash Mobile Wallet</h3>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Wallet Number
+                  </label>
+                  <input
+                    id="admin-settings-jazzcash-number"
+                    type="text"
+                    required
+                    className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
+                    value={settings.jazzcash_number}
+                    onChange={(e) => setSettings({ ...settings, jazzcash_number: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Account Title Name
+                  </label>
+                  <input
+                    id="admin-settings-jazzcash-name"
+                    type="text"
+                    required
+                    className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors"
+                    value={settings.jazzcash_name}
+                    onChange={(e) => setSettings({ ...settings, jazzcash_name: e.target.value })}
+                  />
+                </div>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                JazzCash Wallet Account Title Name
-              </label>
-              <input
-                id="admin-settings-jazzcash-name"
-                type="text"
-                required
-                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors"
-                value={settings.jazzcash_name}
-                onChange={(e) => setSettings({ ...settings, jazzcash_name: e.target.value })}
-              />
+            {/* Easypaisa Section */}
+            <div className="p-4 bg-black/40 rounded-xl border border-white/5 space-y-4">
+              <h3 className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Easypaisa Mobile Wallet</h3>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Wallet Number
+                  </label>
+                  <input
+                    id="admin-settings-easypaisa-number"
+                    type="text"
+                    placeholder="e.g. 03001234567"
+                    className="w-full bg-slate-950 border border-white/10 focus:border-emerald-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
+                    value={settings.easypaisa_number || ""}
+                    onChange={(e) => setSettings({ ...settings, easypaisa_number: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Account Title Name
+                  </label>
+                  <input
+                    id="admin-settings-easypaisa-name"
+                    type="text"
+                    placeholder="e.g. KoSh Vote Software"
+                    className="w-full bg-slate-950 border border-white/10 focus:border-emerald-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors"
+                    value={settings.easypaisa_name || ""}
+                    onChange={(e) => setSettings({ ...settings, easypaisa_name: e.target.value })}
+                  />
+                </div>
+              </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                Upstream Provider SMM API Key (Used to automatically trigger orders upstream)
-              </label>
-              <input
-                id="admin-settings-system-api-key"
-                type="text"
-                placeholder="Optional upstream API key"
-                className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
-                value={settings.system_api_key || ""}
-                onChange={(e) => setSettings({ ...settings, system_api_key: e.target.value })}
-              />
+            {/* Upstream SMM Section */}
+            <div className="p-4 bg-black/40 rounded-xl border border-white/5 space-y-4">
+              <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Upstream SMM Provider Integration</h3>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    SMM Provider API Base URL
+                  </label>
+                  <input
+                    id="admin-settings-smm-url"
+                    type="url"
+                    placeholder="e.g. https://smmprovider.com/api/v2"
+                    className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
+                    value={settings.smm_api_url || ""}
+                    onChange={(e) => setSettings({ ...settings, smm_api_url: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    Provider API Key / Token
+                  </label>
+                  <input
+                    id="admin-settings-system-api-key"
+                    type="text"
+                    placeholder="Provide SMM platform authentication token"
+                    className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
+                    value={settings.system_api_key || ""}
+                    onChange={(e) => setSettings({ ...settings, system_api_key: e.target.value })}
+                  />
+                </div>
+              </div>
             </div>
 
             <button
               id="admin-settings-save-button"
               type="submit"
-              className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-2.5 px-6 rounded-xl shadow-lg transition-colors cursor-pointer"
+              className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs uppercase tracking-wider py-3 px-6 rounded-xl shadow-lg hover:shadow-indigo-500/10 transition-all cursor-pointer"
             >
-              Save Settings
+              Save Configuration Settings
             </button>
           </form>
         </div>

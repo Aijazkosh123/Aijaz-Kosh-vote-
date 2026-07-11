@@ -1,10 +1,12 @@
 import express from "express";
 import path from "path";
-import { open, Database } from "sqlite";
-import sqlite3 from "sqlite3";
+import { Database } from "sqlite";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createServer as createViteServer } from "vite";
+
+// Dynamically load sqlite3 to prevent crashes in environments without binary support (like Vercel)
+let sqlite3: any = null;
 
 const JWT_SECRET = process.env.JWT_SECRET || "kosh-vote-jwt-secret-key-123456";
 const PORT = 3000;
@@ -18,14 +20,342 @@ interface AuthRequest extends express.Request {
 }
 
 // Global DB Connection Reference
-let db: Database<sqlite3.Database, sqlite3.Statement>;
+let db: any;
+
+// A robust pure-JS in-memory database mock for environments where sqlite3 native driver fails (like Vercel)
+function createMemoryDb() {
+  const store: Record<string, any[]> = {
+    users: [],
+    services: [],
+    orders: [],
+    payments: [],
+    settings: []
+  };
+
+  // Seed default settings
+  store.settings.push({ key: "jazzcash_number", value: "03077321978" });
+  store.settings.push({ key: "jazzcash_name", value: "KoSh Vote Software" });
+  store.settings.push({ key: "system_api_key", value: "DEFAULT_SYSTEM_API_KEY" });
+  store.settings.push({ key: "easypaisa_number", value: "03077321978" });
+  store.settings.push({ key: "easypaisa_name", value: "KoSh Vote Software" });
+  store.settings.push({ key: "smm_api_url", value: "https://perfectsmm.com/api/v2" });
+
+  // Seed default users
+  store.users.push({
+    id: 1,
+    name: "Admin Kosh",
+    email: "03077321978",
+    password: "", // Hashed below
+    balance: 15000.0,
+    is_admin: 1,
+    is_blocked: 0,
+    last_seen: 0,
+    api_key: ""
+  });
+
+  // Seed default services
+  const defaultServices = [
+    { id: 1, name: "WhatsApp Poll/Group Vote (Option A)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000, upstream_service_id: "" },
+    { id: 2, name: "WhatsApp Poll/Group Vote (Option B)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000, upstream_service_id: "" },
+    { id: 3, name: "WhatsApp Poll/Group Vote (Option C)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000, upstream_service_id: "" },
+    { id: 4, name: "WhatsApp Poll/Group Vote (Option D)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000, upstream_service_id: "" },
+    { id: 5, name: "WhatsApp Poll/Group Vote (Option E)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000, upstream_service_id: "" },
+    { id: 6, name: "WhatsApp Instant Link Click", category: "WhatsApp Web", price_per_k: 180.0, min_qty: 500, max_qty: 50000, upstream_service_id: "" },
+    { id: 7, name: "Instagram Real Followers", category: "Instagram Services", price_per_k: 120.0, min_qty: 100, max_qty: 100000, upstream_service_id: "" },
+    { id: 8, name: "TikTok High Quality Likes", category: "TikTok Services", price_per_k: 95.0, min_qty: 100, max_qty: 50000, upstream_service_id: "" },
+    { id: 9, name: "YouTube Lifetime Views", category: "YouTube Services", price_per_k: 450.0, min_qty: 500, max_qty: 100000, upstream_service_id: "" },
+  ];
+  store.services = defaultServices;
+
+  // Pre-hash passwords
+  bcrypt.hash("admin123", 10).then(h => { store.users[0].password = h; });
+
+  return {
+    async exec(sql: string) {
+      return;
+    },
+    async get(sql: string, params: any[] = []) {
+      const query = sql.toLowerCase();
+      if (query.includes("select * from users where email =")) {
+        const email = params[0] || (sql.match(/'([^']+)'/)?.[1] || "").toLowerCase().trim();
+        return store.users.find(u => u.email === email);
+      }
+      if (query.includes("select * from users where id =") || query.includes("select id, name, email")) {
+        const id = params[0] || parseInt(sql.match(/\d+/)?.[0] || "0");
+        return store.users.find(u => u.id === id);
+      }
+      if (query.includes("select * from settings where key =")) {
+        const key = params[0] || sql.match(/'([^']+)'/)?.[1];
+        return store.settings.find(s => s.key === key);
+      }
+      if (query.includes("select * from services where id =")) {
+        const id = params[0] || parseInt(sql.match(/\d+/)?.[0] || "0");
+        return store.services.find(s => s.id === id);
+      }
+      if (query.includes("select count(*) as count from users where last_seen >")) {
+        const cutoff = params[0];
+        const count = store.users.filter(u => u.last_seen > cutoff).length;
+        return { count };
+      }
+      if (query.includes("select * from payments where trx_id =")) {
+        const trxId = params[0];
+        return store.payments.find(p => p.trx_id === trxId);
+      }
+      if (query.includes("select count(*)")) {
+        const table = sql.match(/from\s+(\w+)/i)?.[1]?.toLowerCase();
+        return { count: store[table || ""]?.length || 0 };
+      }
+      return null;
+    },
+    async all(sql: string, params: any[] = []) {
+      const query = sql.toLowerCase();
+      if (query.includes("from services")) {
+        return store.services;
+      }
+      if (query.includes("from settings")) {
+        if (query.includes("in ('jazzcash_number'")) {
+          return store.settings.filter(s => ["jazzcash_number", "jazzcash_name", "easypaisa_number", "easypaisa_name"].includes(s.key));
+        }
+        return store.settings;
+      }
+      if (query.includes("from orders")) {
+        let list = store.orders;
+        if (query.includes("where user_id =")) {
+          const userId = params[0] || parseInt(sql.match(/user_id\s*=\s*(\d+)/i)?.[1] || "0");
+          list = store.orders.filter(o => o.user_id === userId);
+        }
+        return list.map(o => {
+          const service = store.services.find(s => s.id === o.service_id);
+          const user = store.users.find(u => u.id === o.user_id);
+          return {
+            ...o,
+            service_name: service ? service.name : "SMM Service",
+            service_category: service ? service.category : "SMM Category",
+            user_name: user ? user.name : "User",
+            user_mobile: user ? user.email : ""
+          };
+        });
+      }
+      if (query.includes("from payments")) {
+        let list = store.payments;
+        if (query.includes("where user_id =")) {
+          const userId = params[0] || parseInt(sql.match(/user_id\s*=\s*(\d+)/i)?.[1] || "0");
+          list = store.payments.filter(p => p.user_id === userId);
+        }
+        return list.map(p => {
+          const user = store.users.find(u => u.id === p.user_id);
+          return {
+            ...p,
+            user_name: user ? user.name : "User",
+            user_mobile: user ? user.email : ""
+          };
+        });
+      }
+      if (query.includes("from users")) {
+        return store.users.map(u => ({
+          ...u,
+          mobile: u.email
+        }));
+      }
+      return [];
+    },
+    async run(sql: string, params: any[] = []) {
+      const query = sql.toLowerCase();
+      if (query.includes("insert into users")) {
+        const name = params[0];
+        const email = params[1];
+        const password = params[2];
+        const last_seen = params[3];
+        const newUser = {
+          id: store.users.length + 1,
+          name,
+          email,
+          password,
+          balance: 0,
+          api_key: "",
+          is_admin: 0,
+          is_blocked: 0,
+          last_seen
+        };
+        store.users.push(newUser);
+        return { lastID: newUser.id };
+      }
+      if (query.includes("insert into orders")) {
+        const userId = params[0];
+        const serviceId = params[1];
+        const link = params[2];
+        const votingOption = params[3];
+        const quantity = params[4];
+        const charge = params[5];
+        const created_at = params[6];
+        const newOrder = {
+          id: store.orders.length + 1,
+          user_id: userId,
+          service_id: serviceId,
+          link,
+          voting_option: votingOption,
+          quantity,
+          charge,
+          status: "Pending",
+          created_at,
+          api_order_id: "",
+          api_response: ""
+        };
+        store.orders.push(newOrder);
+        return { lastID: newOrder.id };
+      }
+      if (query.includes("insert into payments")) {
+        const userId = params[0];
+        const amount = params[1];
+        const trxId = params[2];
+        const screenshot = params[3];
+        const created_at = params[4];
+        const newPayment = {
+          id: store.payments.length + 1,
+          user_id: userId,
+          amount,
+          trx_id: trxId,
+          screenshot,
+          status: "Pending",
+          created_at
+        };
+        store.payments.push(newPayment);
+        return { lastID: newPayment.id };
+      }
+      if (query.includes("update users set")) {
+        if (query.includes("last_seen =") && query.includes("where id =")) {
+          const lastSeen = params[0];
+          const id = params[1];
+          const u = store.users.find(x => x.id === id);
+          if (u) u.last_seen = lastSeen;
+        } else if (query.includes("api_key =") && query.includes("where id =")) {
+          const apiKey = params[0];
+          const id = params[1];
+          const u = store.users.find(x => x.id === id);
+          if (u) u.api_key = apiKey;
+        } else if (query.includes("balance =") && query.includes("where id =")) {
+          const balance = params[0];
+          const id = params[1];
+          const u = store.users.find(x => x.id === id);
+          if (u) u.balance = balance;
+        } else if (query.includes("is_blocked =") && query.includes("where id =")) {
+          const isBlocked = params[0];
+          const id = params[1];
+          const u = store.users.find(x => x.id === id);
+          if (u) u.is_blocked = isBlocked;
+        } else if (query.includes("password =") && query.includes("where id =")) {
+          const password = params[0];
+          const id = params[1];
+          const u = store.users.find(x => x.id === id);
+          if (u) u.password = password;
+        }
+        return { changes: 1 };
+      }
+      if (query.includes("update orders set")) {
+        if (query.includes("status =") && query.includes("where id =")) {
+          const status = params[0];
+          const id = params[1];
+          const o = store.orders.find(x => x.id === id);
+          if (o) o.status = status;
+        }
+        return { changes: 1 };
+      }
+      if (query.includes("update payments set")) {
+        if (query.includes("status =") && query.includes("where id =")) {
+          const status = params[0];
+          const id = params[1];
+          const p = store.payments.find(x => x.id === id);
+          if (p) p.status = status;
+        }
+        return { changes: 1 };
+      }
+      if (query.includes("update settings set value =")) {
+        const value = params[0];
+        const key = params[1];
+        const s = store.settings.find(x => x.key === key);
+        if (s) {
+          s.value = value;
+        } else {
+          store.settings.push({ key, value });
+        }
+        return { changes: 1 };
+      }
+      if (query.includes("delete from services where id =")) {
+        const id = params[0] || parseInt(sql.match(/\d+/)?.[0] || "0");
+        store.services = store.services.filter(s => s.id !== id);
+        return { changes: 1 };
+      }
+      if (query.includes("insert into services")) {
+        const name = params[0];
+        const category = params[1];
+        const price_per_k = params[2];
+        const min_qty = params[3];
+        const max_qty = params[4];
+        const upstream_service_id = params[5] || "";
+        const newService = {
+          id: store.services.length + 1,
+          name,
+          category,
+          price_per_k,
+          min_qty,
+          max_qty,
+          upstream_service_id
+        };
+        store.services.push(newService);
+        return { lastID: newService.id };
+      }
+      if (query.includes("update services set")) {
+        const id = params[params.length - 1];
+        const s = store.services.find(x => x.id === id);
+        if (s) {
+          if (params.length === 5) {
+            s.price_per_k = params[0];
+            s.min_qty = params[1];
+            s.max_qty = params[2];
+            s.upstream_service_id = params[3];
+          } else {
+            s.name = params[0];
+            s.category = params[1];
+            s.price_per_k = params[2];
+            s.min_qty = params[3];
+            s.max_qty = params[4];
+            s.upstream_service_id = params[5];
+          }
+        }
+        return { changes: 1 };
+      }
+      return { changes: 0 };
+    }
+  };
+}
 
 async function initDb() {
-  const dbPath = process.env.VERCEL ? "/tmp/data.db" : "./data.db";
-  db = await open({
-    filename: dbPath,
-    driver: sqlite3.Database,
-  });
+  if (!sqlite3) {
+    try {
+      sqlite3 = (await import("sqlite3")).default;
+    } catch (err: any) {
+      console.warn("[Database] Native sqlite3 module failed to load. Falling back to pure-JS database engine.");
+    }
+  }
+
+  if (sqlite3) {
+    try {
+      const { open } = await import("sqlite");
+      const dbPath = process.env.VERCEL ? "/tmp/data.db" : "./data.db";
+      db = await open({
+        filename: dbPath,
+        driver: sqlite3.Database,
+      });
+      console.log("[Database] Initialized real SQLite database at:", dbPath);
+    } catch (err) {
+      console.error("[Database] Failed to open real SQLite db, loading memory-DB:", err);
+      db = createMemoryDb();
+      return;
+    }
+  } else {
+    db = createMemoryDb();
+    return;
+  }
 
   // Create tables
   await db.exec(`
@@ -114,34 +444,30 @@ async function initDb() {
     await db.exec("ALTER TABLE orders ADD COLUMN api_response TEXT DEFAULT ''");
   } catch (e) {}
 
-  // Seed Admin and default users
-  const adminUser = await db.get("SELECT * FROM users WHERE email = 'admin@kosh.com'");
+  // Clean up any old demo user
+  try {
+    await db.run("DELETE FROM users WHERE email = 'user@kosh.com'");
+  } catch (e) {}
+
+  // Seed Admin
+  const adminUser = await db.get("SELECT * FROM users WHERE email = '03077321978'");
   if (!adminUser) {
     const hashedAdminPass = await bcrypt.hash("admin123", 10);
     await db.run(`
       INSERT INTO users (name, email, password, balance, is_admin)
-      VALUES ('Admin Kosh', 'admin@kosh.com', ?, 15000.0, 1)
+      VALUES ('Admin Kosh', '03077321978', ?, 15000.0, 1)
     `, [hashedAdminPass]);
-  }
-
-  const demoUser = await db.get("SELECT * FROM users WHERE email = 'user@kosh.com'");
-  if (!demoUser) {
-    const hashedUserPass = await bcrypt.hash("user123", 10);
-    await db.run(`
-      INSERT INTO users (name, email, password, balance, is_admin)
-      VALUES ('Demo User', 'user@kosh.com', ?, 500.0, 0)
-    `, [hashedUserPass]);
   }
 
   // Seed WhatsApp voting services + general SMM services
   const serviceCount = await db.get("SELECT count(*) as count FROM services");
   if (serviceCount && (serviceCount as any).count === 0) {
     const defaultServices = [
-      { name: "WhatsApp Poll/Group Vote (Option A)", category: "WhatsApp Polling", price_per_k: 250.0, min_qty: 100, max_qty: 25000 },
-      { name: "WhatsApp Poll/Group Vote (Option B)", category: "WhatsApp Polling", price_per_k: 250.0, min_qty: 100, max_qty: 25000 },
-      { name: "WhatsApp Poll/Group Vote (Option C)", category: "WhatsApp Polling", price_per_k: 250.0, min_qty: 100, max_qty: 25000 },
-      { name: "WhatsApp Poll/Group Vote (Option D)", category: "WhatsApp Polling", price_per_k: 250.0, min_qty: 100, max_qty: 25000 },
-      { name: "WhatsApp Poll/Group Vote (Option E)", category: "WhatsApp Polling", price_per_k: 250.0, min_qty: 100, max_qty: 25000 },
+      { name: "WhatsApp Poll/Group Vote (Option A)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000 },
+      { name: "WhatsApp Poll/Group Vote (Option B)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000 },
+      { name: "WhatsApp Poll/Group Vote (Option C)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000 },
+      { name: "WhatsApp Poll/Group Vote (Option D)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000 },
+      { name: "WhatsApp Poll/Group Vote (Option E)", category: "WhatsApp Polling", price_per_k: 1800.0, min_qty: 10, max_qty: 25000 },
       { name: "WhatsApp Instant Link Click", category: "WhatsApp Web", price_per_k: 180.0, min_qty: 500, max_qty: 50000 },
       { name: "Instagram Real Followers", category: "Instagram Services", price_per_k: 120.0, min_qty: 100, max_qty: 100000 },
       { name: "TikTok High Quality Likes", category: "TikTok Services", price_per_k: 95.0, min_qty: 100, max_qty: 50000 },
@@ -155,6 +481,15 @@ async function initDb() {
       `, [s.name, s.category, s.price_per_k, s.min_qty, s.max_qty]);
     }
   }
+
+  // Automatically update existing SMM services to use 1.8 Rs/vote (1800/K) and min_qty 10 on startup
+  try {
+    await db.run(`
+      UPDATE services
+      SET price_per_k = 1800.0, min_qty = 10
+      WHERE name LIKE '%WhatsApp Poll/Group Vote%'
+    `);
+  } catch (e) {}
 
   console.log("SQLite Database initialized & seeded successfully.");
 }
@@ -209,18 +544,18 @@ async function startServer() {
 
   // --- API ROUTES ---
 
-  // Auth: Signup
+  // Auth: Signup (Mobile Number)
   app.post("/api/auth/signup", async (req, res) => {
     try {
-      const { name, email, password } = req.body;
-      if (!name || !email || !password) {
+      const { name, mobile, password } = req.body;
+      if (!name || !mobile || !password) {
         res.status(400).json({ error: "Please fill out all fields" });
         return;
       }
 
-      const existingUser = await db.get("SELECT * FROM users WHERE email = ?", [email.toLowerCase().trim()]);
+      const existingUser = await db.get("SELECT * FROM users WHERE email = ?", [mobile.trim()]);
       if (existingUser) {
-        res.status(400).json({ error: "Email address is already in use" });
+        res.status(400).json({ error: "Mobile number is already in use" });
         return;
       }
 
@@ -228,32 +563,32 @@ async function startServer() {
       const result = await db.run(`
         INSERT INTO users (name, email, password, balance, is_admin, is_blocked, last_seen)
         VALUES (?, ?, ?, 0.0, 0, 0, ?)
-      `, [name.trim(), email.toLowerCase().trim(), hashedPassword, Date.now()]);
+      `, [name.trim(), mobile.trim(), hashedPassword, Date.now()]);
 
       const userId = result.lastID;
-      const token = jwt.sign({ id: userId, email: email.toLowerCase().trim(), is_admin: 0 }, JWT_SECRET, { expiresIn: "7d" });
+      const token = jwt.sign({ id: userId, email: mobile.trim(), is_admin: 0 }, JWT_SECRET, { expiresIn: "7d" });
 
       res.status(201).json({
         token,
-        user: { id: userId, name: name.trim(), email: email.toLowerCase().trim(), balance: 0.0, is_admin: 0 }
+        user: { id: userId, name: name.trim(), mobile: mobile.trim(), balance: 0.0, is_admin: 0 }
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  // Auth: Login
+  // Auth: Login (Mobile Number)
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        res.status(400).json({ error: "Email and password are required" });
+      const { mobile, password } = req.body;
+      if (!mobile || !password) {
+        res.status(400).json({ error: "Mobile number and password are required" });
         return;
       }
 
-      const user = await db.get("SELECT * FROM users WHERE email = ?", [email.toLowerCase().trim()]);
+      const user = await db.get("SELECT * FROM users WHERE email = ?", [mobile.trim()]);
       if (!user) {
-        res.status(401).json({ error: "Invalid email or password" });
+        res.status(401).json({ error: "Invalid mobile number or password" });
         return;
       }
 
@@ -264,7 +599,7 @@ async function startServer() {
 
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        res.status(401).json({ error: "Invalid email or password" });
+        res.status(401).json({ error: "Invalid mobile number or password" });
         return;
       }
 
@@ -278,7 +613,7 @@ async function startServer() {
         user: {
           id: user.id,
           name: user.name,
-          email: user.email,
+          mobile: user.email,
           balance: user.balance,
           is_admin: user.is_admin,
           api_key: user.api_key
@@ -289,18 +624,18 @@ async function startServer() {
     }
   });
 
-  // Auth: Forgot Password (Simulated reset)
+  // Auth: Forgot Password (Simulated reset via Mobile)
   app.post("/api/auth/forgot-password", async (req, res) => {
     try {
-      const { email, newPassword } = req.body;
-      if (!email) {
-        res.status(400).json({ error: "Email address is required" });
+      const { mobile, newPassword } = req.body;
+      if (!mobile) {
+        res.status(400).json({ error: "Mobile number is required" });
         return;
       }
 
-      const user = await db.get("SELECT * FROM users WHERE email = ?", [email.toLowerCase().trim()]);
+      const user = await db.get("SELECT * FROM users WHERE email = ?", [mobile.trim()]);
       if (!user) {
-        res.status(404).json({ error: "No account found with this email" });
+        res.status(404).json({ error: "No account found with this mobile number" });
         return;
       }
 
@@ -337,7 +672,15 @@ async function startServer() {
       // Heartbeat
       await db.run("UPDATE users SET last_seen = ? WHERE id = ?", [Date.now(), user.id]);
 
-      res.json(user);
+      res.json({
+        id: user.id,
+        name: user.name,
+        mobile: user.email,
+        balance: user.balance,
+        is_admin: user.is_admin,
+        is_blocked: user.is_blocked,
+        api_key: user.api_key
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -349,6 +692,35 @@ async function startServer() {
       const { api_key } = req.body;
       await db.run("UPDATE users SET api_key = ? WHERE id = ?", [api_key || "", req.user?.id]);
       res.json({ message: "SMM API Key updated successfully" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // User: Change Password
+  app.post("/api/user/change-password", authenticateToken, async (req: AuthRequest, res) => {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      if (!currentPassword || !newPassword) {
+        res.status(400).json({ error: "Please provide current and new passwords" });
+        return;
+      }
+
+      const user = await db.get("SELECT password FROM users WHERE id = ?", [req.user?.id]);
+      if (!user) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      const isMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!isMatch) {
+        res.status(400).json({ error: "Current password is incorrect" });
+        return;
+      }
+
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await db.run("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, req.user?.id]);
+      res.json({ message: "Password updated successfully!" });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -554,7 +926,7 @@ async function startServer() {
   app.get("/api/admin/users", authenticateToken, requireAdmin, async (req, res) => {
     try {
       const users = await db.all(`
-        SELECT id, name, email, balance, api_key, is_admin, is_blocked, last_seen
+        SELECT id, name, email as mobile, balance, api_key, is_admin, is_blocked, last_seen
         FROM users
         ORDER BY is_admin DESC, name ASC
       `);
@@ -623,7 +995,7 @@ async function startServer() {
   app.get("/api/admin/payments", authenticateToken, requireAdmin, async (req, res) => {
     try {
       const payments = await db.all(`
-        SELECT p.*, u.name as user_name, u.email as user_email
+        SELECT p.*, u.name as user_name, u.email as user_mobile
         FROM payments p
         JOIN users u ON p.user_id = u.id
         ORDER BY p.created_at DESC
@@ -685,7 +1057,7 @@ async function startServer() {
   app.get("/api/admin/orders", authenticateToken, requireAdmin, async (req, res) => {
     try {
       const orders = await db.all(`
-        SELECT o.*, s.name as service_name, s.category as service_category, u.name as user_name, u.email as user_email
+        SELECT o.*, s.name as service_name, s.category as service_category, u.name as user_name, u.email as user_mobile
         FROM orders o
         JOIN services s ON o.service_id = s.id
         JOIN users u ON o.user_id = u.id

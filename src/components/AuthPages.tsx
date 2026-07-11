@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Lock, Mail, User, ArrowRight, CheckCircle, ShieldAlert } from "lucide-react";
+import { Lock, Phone, User, ArrowRight, CheckCircle, ShieldAlert } from "lucide-react";
 
 interface AuthPagesProps {
   onLoginSuccess: (token: string, user: any) => void;
@@ -7,7 +7,7 @@ interface AuthPagesProps {
 
 export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
   const [view, setView] = useState<"login" | "signup" | "forgot">("login");
-  const [email, setEmail] = useState("");
+  const [mobile, setMobile] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -30,7 +30,7 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ mobile, password }),
       });
       const data = await res.json();
 
@@ -55,7 +55,7 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
       const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name, mobile, password }),
       });
       const data = await res.json();
 
@@ -80,7 +80,7 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
       const res = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, newPassword: canReset ? newPassword : "" }),
+        body: JSON.stringify({ mobile, newPassword: canReset ? newPassword : "" }),
       });
       const data = await res.json();
 
@@ -92,7 +92,7 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
         setSuccess("Password updated successfully! Please login with your new password.");
         setCanReset(false);
         setView("login");
-        setEmail("");
+        setMobile("");
         setPassword("");
         setNewPassword("");
       } else {
@@ -147,20 +147,20 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
           <form id="login-form" onSubmit={handleLogin} className="space-y-5">
             <div>
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                Email Address
+                Mobile Number
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
-                  <Mail className="w-4 h-4" />
+                  <Phone className="w-4 h-4" />
                 </span>
                 <input
-                  id="login-email"
-                  type="email"
+                  id="login-mobile"
+                  type="tel"
                   required
-                  placeholder="name@example.com"
+                  placeholder="e.g. 03077321978"
                   className="w-full bg-slate-950/60 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
                 />
               </div>
             </div>
@@ -250,20 +250,20 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
 
             <div>
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                Email Address
+                Mobile Number
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
-                  <Mail className="w-4 h-4" />
+                  <Phone className="w-4 h-4" />
                 </span>
                 <input
-                  id="signup-email"
-                  type="email"
+                  id="signup-mobile"
+                  type="tel"
                   required
-                  placeholder="name@example.com"
+                  placeholder="e.g. 03001234567"
                   className="w-full bg-slate-950/60 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
                 />
               </div>
             </div>
@@ -320,21 +320,21 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
           <form id="forgot-form" onSubmit={handleForgot} className="space-y-5">
             <div>
               <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                Your Email Address
+                Your Mobile Number
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
-                  <Mail className="w-4 h-4" />
+                  <Phone className="w-4 h-4" />
                 </span>
                 <input
-                  id="forgot-email"
-                  type="email"
+                  id="forgot-mobile"
+                  type="tel"
                   required
                   disabled={canReset}
-                  placeholder="name@example.com"
+                  placeholder="e.g. 03001234567"
                   className="w-full bg-slate-950/60 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors disabled:opacity-50"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  value={mobile}
+                  onChange={(e) => setMobile(e.target.value)}
                 />
               </div>
             </div>
@@ -388,12 +388,6 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
             </div>
           </form>
         )}
-
-        {/* Demo Credentials Helper */}
-        <div id="demo-credentials" className="mt-8 pt-4 border-t border-slate-800/60 text-center text-[11px] text-slate-500 space-y-1">
-          <p>Demo Admin: <span className="text-slate-400">admin@kosh.com</span> / <span className="text-slate-400">admin123</span></p>
-          <p>Demo User: <span className="text-slate-400">user@kosh.com</span> / <span className="text-slate-400">user123</span></p>
-        </div>
 
       </div>
     </div>

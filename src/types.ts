@@ -1,7 +1,7 @@
 export interface User {
   id: number;
   name: string;
-  email: string;
+  mobile: string;
   balance: number;
   api_key?: string;
   is_admin: number;
@@ -16,6 +16,7 @@ export interface Service {
   price_per_k: number;
   min_qty: number;
   max_qty: number;
+  upstream_service_id?: string;
 }
 
 export interface Order {
@@ -31,7 +32,9 @@ export interface Order {
   service_name?: string;
   service_category?: string;
   user_name?: string;
-  user_email?: string;
+  user_mobile?: string;
+  api_order_id?: string;
+  api_response?: string;
 }
 
 export interface Payment {
@@ -43,11 +46,14 @@ export interface Payment {
   status: 'Pending' | 'Approved' | 'Rejected';
   created_at: number;
   user_name?: string;
-  user_email?: string;
+  user_mobile?: string;
 }
 
 export interface SystemSettings {
   jazzcash_number: string;
   jazzcash_name: string;
+  easypaisa_number?: string;
+  easypaisa_name?: string;
   system_api_key?: string;
+  smm_api_url?: string;
 }
