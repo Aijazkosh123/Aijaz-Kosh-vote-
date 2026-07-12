@@ -6,7 +6,7 @@ interface AuthPagesProps {
 }
 
 export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
-  const [view, setView] = useState<"login" | "signup" | "forgot">("login");
+  const [view, setView] = useState<"login" | "signup">("login");
   const [mobile, setMobile] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -64,41 +64,6 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
       }
 
       onLoginSuccess(data.token, data.user);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleForgot = async (e: React.FormEvent) => {
-    e.preventDefault();
-    clearMessages();
-    setLoading(true);
-
-    try {
-      const res = await fetch("/api/auth/forgot-password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mobile, newPassword: canReset ? newPassword : "" }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Password reset failed");
-      }
-
-      if (canReset) {
-        setSuccess("Password updated successfully! Please login with your new password.");
-        setCanReset(false);
-        setView("login");
-        setMobile("");
-        setPassword("");
-        setNewPassword("");
-      } else {
-        setCanReset(true);
-        setSuccess("Account verified! Please specify your new password below.");
-      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -166,22 +131,9 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
             </div>
 
             <div>
-              <div className="flex justify-between items-center mb-2">
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                  Password
-                </label>
-                <button
-                  id="forgot-password-link"
-                  type="button"
-                  onClick={() => {
-                    setView("forgot");
-                    clearMessages();
-                  }}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-                >
-                  Forgot password?
-                </button>
-              </div>
+              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                Password
+              </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
                   <Lock className="w-4 h-4" />
@@ -310,80 +262,6 @@ export default function AuthPages({ onLoginSuccess }: AuthPagesProps) {
                 className="text-indigo-400 font-medium hover:text-indigo-300 transition-colors"
               >
                 Sign In
-              </button>
-            </div>
-          </form>
-        )}
-
-        {/* --- VIEW: FORGOT PASSWORD --- */}
-        {view === "forgot" && (
-          <form id="forgot-form" onSubmit={handleForgot} className="space-y-5">
-            <div>
-              <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                Your Mobile Number
-              </label>
-              <div className="relative">
-                <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
-                  <Phone className="w-4 h-4" />
-                </span>
-                <input
-                  id="forgot-mobile"
-                  type="tel"
-                  required
-                  disabled={canReset}
-                  placeholder="e.g. 03001234567"
-                  className="w-full bg-slate-950/60 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors disabled:opacity-50"
-                  value={mobile}
-                  onChange={(e) => setMobile(e.target.value)}
-                />
-              </div>
-            </div>
-
-            {canReset && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Enter New Password
-                </label>
-                <div className="relative">
-                  <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500">
-                    <Lock className="w-4 h-4" />
-                  </span>
-                  <input
-                    id="forgot-new-password"
-                    type="password"
-                    required
-                    placeholder="Min 6 characters"
-                    className="w-full bg-slate-950/60 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-3 pl-11 pr-4 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                  />
-                </div>
-              </div>
-            )}
-
-            <button
-              id="forgot-submit-button"
-              type="submit"
-              disabled={loading}
-              className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-medium text-sm py-3 px-4 rounded-xl shadow-lg shadow-indigo-600/10 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-            >
-              {loading ? "Processing..." : canReset ? "Update Password" : "Verify Account"}
-              <ArrowRight className="w-4 h-4" />
-            </button>
-
-            <div className="text-center text-xs text-slate-500 mt-6 pt-4 border-t border-slate-800/60">
-              Remember your details?{" "}
-              <button
-                id="toggle-login-back"
-                type="button"
-                onClick={() => {
-                  setView("login");
-                  setCanReset(false);
-                  clearMessages();
-                }}
-                className="text-indigo-400 font-medium hover:text-indigo-300 transition-colors"
-              >
-                Go Back to Login
               </button>
             </div>
           </form>
