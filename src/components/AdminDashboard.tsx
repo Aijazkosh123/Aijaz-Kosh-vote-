@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Users, CreditCard, ShoppingBag, Settings, Check, X, ShieldAlert, Edit, Trash2, Shield, Search, RefreshCw, Ban, UserCheck, DollarSign, Plus, Bell, Lock as LockIcon } from "lucide-react";
+import { Users, CreditCard, ShoppingBag, Settings, Check, X, ShieldAlert, Edit, Trash2, Shield, Search, RefreshCw, Ban, UserCheck, DollarSign, Plus, Bell } from "lucide-react";
 import { User, Order, Payment, Service, SystemSettings } from "../types";
 
 interface AdminDashboardProps {
@@ -275,27 +275,6 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to remove user");
 
-      setAdminSuccess(data.message);
-      fetchUsers();
-    } catch (err: any) {
-      setAdminError(err.message);
-    }
-  };
-
-  // Handle Reset User Password
-  const handleResetPassword = async (userId: number, newPassword: string) => {
-    clearMessages();
-    try {
-      const res = await fetch("/api/admin/users/reset-password", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ userId, newPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to reset password");
       setAdminSuccess(data.message);
       fetchUsers();
     } catch (err: any) {
@@ -763,25 +742,6 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                               title={u.is_blocked === 1 ? "Activate Client" : "Suspend Client"}
                             >
                               {u.is_blocked === 1 ? <UserCheck className="w-3.5 h-3.5" /> : <Ban className="w-3.5 h-3.5" />}
-                            </button>
-                          )}
-
-                          {/* Reset Password CTA */}
-                          {u.is_admin === 0 && (
-                            <button
-                              id={`reset-pass-user-${u.id}`}
-                              onClick={() => {
-                                const newPwd = prompt(`Enter new password for ${u.name}:`);
-                                if (newPwd && newPwd.length >= 4) {
-                                  handleResetPassword(u.id, newPwd);
-                                } else if (newPwd) {
-                                  setAdminError("Password must be at least 4 characters");
-                                }
-                              }}
-                              className="p-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500 hover:text-white transition-all cursor-pointer"
-                              title="Reset Password"
-                            >
-                              <LockIcon className="w-3.5 h-3.5" />
                             </button>
                           )}
 
