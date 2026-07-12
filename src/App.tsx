@@ -12,7 +12,6 @@ export default function App() {
   const [isAdminMode, setIsAdminMode] = useState<boolean>(false);
   const [appLoading, setAppLoading] = useState<boolean>(true);
 
-  // Authenticate user on mount
   useEffect(() => {
     const storedToken = localStorage.getItem("kosh_vote_token");
     const storedUser = localStorage.getItem("kosh_vote_user");
@@ -22,12 +21,10 @@ export default function App() {
       const parsedUser = JSON.parse(storedUser);
       setUser(parsedUser);
       
-      // Auto-set admin mode default if they are admin
       if (parsedUser.is_admin === 1) {
         setIsAdminMode(true);
       }
 
-      // Refresh credentials from server
       fetch("/api/user/me", {
         headers: { Authorization: `Bearer ${storedToken}` },
       })
@@ -43,7 +40,6 @@ export default function App() {
           localStorage.setItem("kosh_vote_user", JSON.stringify(freshUser));
         })
         .catch(() => {
-          // If token expired, clear it
           handleLogout();
         })
         .finally(() => {
@@ -75,7 +71,6 @@ export default function App() {
     localStorage.removeItem("kosh_vote_user");
   };
 
-  // Refresh balance trigger
   const handleRefreshBalance = async () => {
     if (!token) return;
     try {
@@ -105,14 +100,12 @@ export default function App() {
     );
   }
 
-  // Session exists layout
   return (
     <div id="root-viewport" className="min-h-screen bg-[#030712] text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-white">
       {!token || !user ? (
         <AuthPages onLoginSuccess={handleLoginSuccess} />
       ) : (
         <div id="authenticated-layout" className="min-h-screen flex flex-col">
-          {/* Header */}
           <Navbar
             user={user}
             isAdminMode={isAdminMode}
@@ -120,15 +113,13 @@ export default function App() {
             onLogout={handleLogout}
           />
 
-          {/* Admin Banner Indicator */}
           {user.is_admin === 1 && isAdminMode && (
             <div id="admin-banner" className="bg-indigo-600/10 border-y border-indigo-500/15 py-2 px-4 text-center text-xs font-semibold text-indigo-400 flex items-center justify-center gap-2">
               <Shield className="w-4 h-4" />
-              <span>You are viewing the administration control board. Toggle &quot;Admin Panel&quot; in the header to return to customer view.</span>
+              <span>You are viewing the administration control board. Toggle "Admin Panel" in the header to return to customer view.</span>
             </div>
           )}
 
-          {/* Main Dashboard Panel Body */}
           <main className="flex-1">
             {user.is_admin === 1 && isAdminMode ? (
               <AdminDashboard token={token} onRefreshUserBalance={handleRefreshBalance} />
@@ -149,7 +140,6 @@ export default function App() {
             )}
           </main>
 
-          {/* Footer */}
           <footer className="border-t border-slate-900 bg-slate-950/40 py-6 px-4 text-center text-xs text-slate-500">
             <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
               <p>© 2026 KoSh Vote Software. All rights reserved.</p>
