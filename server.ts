@@ -39,6 +39,7 @@ function createMemoryDb() {
   store.settings.push({ key: "easypaisa_number", value: "03077321978" });
   store.settings.push({ key: "easypaisa_name", value: "KoSh Vote Software" });
   store.settings.push({ key: "smm_api_url", value: "https://perfectsmm.com/api/v2" });
+  store.settings.push({ key: "support_number", value: "03077321978" });
 
   // Seed default users
   store.users.push({
@@ -46,7 +47,7 @@ function createMemoryDb() {
     name: "Admin Kosh",
     email: "03077321978",
     password: "", // Hashed below
-    balance: 15000.0,
+    balance: 0.0,
     is_admin: 1,
     is_blocked: 0,
     last_seen: 0,
@@ -114,7 +115,7 @@ function createMemoryDb() {
       }
       if (query.includes("from settings")) {
         if (query.includes("in ('jazzcash_number'")) {
-          return store.settings.filter(s => ["jazzcash_number", "jazzcash_name", "easypaisa_number", "easypaisa_name"].includes(s.key));
+          return store.settings.filter(s => ["jazzcash_number", "jazzcash_name", "easypaisa_number", "easypaisa_name", "support_number"].includes(s.key));
         }
         return store.settings;
       }
@@ -431,6 +432,7 @@ async function initDb() {
   const smmApiUrl = await db.get("SELECT * FROM settings WHERE key = 'smm_api_url'");
   if (!smmApiUrl) {
     await db.run("INSERT INTO settings (key, value) VALUES ('smm_api_url', 'https://perfectsmm.com/api/v2')");
+    await db.run("INSERT INTO settings (key, value) VALUES ('support_number', '03077321978')");
   }
 
   // Apply migrations safely
@@ -739,7 +741,7 @@ async function startServer() {
   // Fetch public settings for deposit guides
   app.get("/api/settings/public", async (req, res) => {
     try {
-      const dbSettings = await db.all("SELECT key, value FROM settings WHERE key IN ('jazzcash_number', 'jazzcash_name', 'easypaisa_number', 'easypaisa_name')");
+      const dbSettings = await db.all("SELECT key, value FROM settings WHERE key IN ('jazzcash_number', 'jazzcash_name', 'easypaisa_number', 'easypaisa_name', 'support_number')");
       const mapped = dbSettings.reduce((acc: any, curr) => {
         acc[curr.key] = curr.value;
         return acc;
@@ -1089,6 +1091,32 @@ async function startServer() {
         WHERE id = ?
       `, [parseFloat(price_per_k), parseInt(min_qty), parseInt(max_qty), upstream_service_id || "", serviceId]);
       res.json({ message: "Service pricing and SMM upstream details updated successfully." });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+
+  // Admin: Reset User Password
+  app.post("/api/admin/users/reset-password", authenticateToken, requireAdmin, async (req, res) => {
+    try {
+      const { userId, newPassword } = req.body;
+      if (!userId || !newPassword) {
+        res.status(400).json({ error: "User ID and new password are required" });
+        return;
+      }
+      if (typeof newPassword !== 'string' || newPassword.length < 4) {
+        res.status(400).json({ error: "Password must be at least 4 characters" });
+        return;
+      }
+      const targetUser = await db.get("SELECT name FROM users WHERE id = ?", [userId]);
+      if (!targetUser) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+      await db.run("UPDATE users SET password = ? WHERE id = ?", [hashedPassword, userId]);
+      res.json({ message: "Password reset done" });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
