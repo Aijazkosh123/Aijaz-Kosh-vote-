@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Users, CreditCard, ShoppingBag, Settings, Check, X, ShieldAlert, Edit, Trash2, Shield, Search, RefreshCw, Ban, UserCheck, DollarSign } from "lucide-react";
+import { Users, CreditCard, ShoppingBag, Settings, Check, X, ShieldAlert, Edit, Trash2, Shield, Search, RefreshCw, Ban, UserCheck, DollarSign, Plus, Bell, Lock as LockIcon } from "lucide-react";
 import { User, Order, Payment, Service, SystemSettings } from "../types";
 
 interface AdminDashboardProps {
@@ -17,13 +17,23 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
   const [services, setServices] = useState<Service[]>([]);
   const [settings, setSettings] = useState<SystemSettings>({
     jazzcash_number: "03077321978",
-    jazzcash_name: "KoSh Vote Software",
+    jazzcash_name: "Aijaz Ahmed",
     easypaisa_number: "03077321978",
-    easypaisa_name: "KoSh Vote Software",
+    easypaisa_name: "Aijaz Ahmed",
     system_api_key: "",
     smm_api_url: ""
   });
   const [onlineUsers, setOnlineUsers] = useState<number>(1);
+  const [pendingOrderCount, setPendingOrderCount] = useState<number>(0);
+  const [lastSeenPendingOrderId, setLastSeenPendingOrderId] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    return parseInt(window.localStorage.getItem("admin_last_seen_order_id") || "0", 10) || 0;
+  });
+  const [latestOrderId, setLatestOrderId] = useState<number>(0);
+  const [addingService, setAddingService] = useState<boolean>(false);
+  const [newService, setNewService] = useState<{ name: string; category: string; price_per_k: string; min_qty: string; max_qty: string; upstream_service_id: string }>({
+    name: "", category: "", price_per_k: "", min_qty: "100", max_qty: "10000", upstream_service_id: ""
+  });
 
   // Search / Filters
   const [userSearch, setUserSearch] = useState("");
@@ -122,6 +132,21 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     }
   };
 
+  const fetchNotifications = async () => {
+    try {
+      const res = await fetch("/api/admin/notifications", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingOrderCount(data.pendingOrders || 0);
+        setLatestOrderId(data.latestOrderId || 0);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const refreshAllAdminData = async () => {
     setLoading(true);
     await Promise.all([
@@ -144,6 +169,25 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     const timer = setInterval(fetchOnlineUsers, 15000);
     return () => clearInterval(timer);
   }, []);
+
+  // Poll admin notifications (pending orders) every 10 seconds
+  useEffect(() => {
+    fetchNotifications();
+    const timer = setInterval(fetchNotifications, 10000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // When admin actually views the Orders tab, mark the latest pending order as seen
+  useEffect(() => {
+    if (adminTab === "orders" && latestOrderId > lastSeenPendingOrderId) {
+      setLastSeenPendingOrderId(latestOrderId);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("admin_last_seen_order_id", String(latestOrderId));
+      }
+    }
+  }, [adminTab, latestOrderId, lastSeenPendingOrderId]);
+
+  const hasNewOrderNotification = latestOrderId > lastSeenPendingOrderId && pendingOrderCount > 0;
 
   // Handle Balance adjustment (Add or Deduct)
   const handleAdjustBalanceSubmit = async (e: React.FormEvent) => {
@@ -238,6 +282,27 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     }
   };
 
+  // Handle Reset User Password
+  const handleResetPassword = async (userId: number, newPassword: string) => {
+    clearMessages();
+    try {
+      const res = await fetch("/api/admin/users/reset-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ userId, newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to reset password");
+      setAdminSuccess(data.message);
+      fetchUsers();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
   // Handle Approve Deposit Payment
   const handleApprovePayment = async (paymentId: number) => {
     clearMessages();
@@ -308,32 +373,11 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
     }
   };
 
-  // Handle sending order upstream to the SMM Panel API
-  const handleSendUpstream = async (orderId: number) => {
-    clearMessages();
-    setLoading(true);
-    try {
-      const res = await fetch("/api/admin/orders/send-upstream", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ orderId }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to forward order upstream");
-      }
-
-      setAdminSuccess(data.message);
-      fetchOrders();
-    } catch (err: any) {
-      setAdminError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  // Cancel an order (refunds user via server)
+  const handleCancelOrder = async (orderId: number) => {
+    if (!confirm("Cancel this order and refund the user's balance?")) return;
+    await handleUpdateOrderStatus(orderId, "Cancelled");
+    onRefreshUserBalance();
   };
 
   // Handle Save Service Details / Price
@@ -351,10 +395,12 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
         },
         body: JSON.stringify({
           serviceId: editingService.id,
+          name: editingService.name,
+          category: editingService.category,
           price_per_k: editingService.price_per_k,
           min_qty: editingService.min_qty,
           max_qty: editingService.max_qty,
-          upstream_service_id: editingService.upstream_service_id || "",
+          upstream_service_id: (editingService as any).upstream_service_id || "",
         }),
       });
 
@@ -363,6 +409,52 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
 
       setAdminSuccess(data.message);
       setEditingService(null);
+      fetchServices();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Add Service
+  const handleAddService = async (e: React.FormEvent) => {
+    e.preventDefault();
+    clearMessages();
+    try {
+      const res = await fetch("/api/admin/services/add", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(newService),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to add service");
+      setAdminSuccess(data.message);
+      setAddingService(false);
+      setNewService({ name: "", category: "", price_per_k: "", min_qty: "100", max_qty: "10000", upstream_service_id: "" });
+      fetchServices();
+    } catch (err: any) {
+      setAdminError(err.message);
+    }
+  };
+
+  // Handle Delete Service
+  const handleDeleteService = async (serviceId: number) => {
+    if (!confirm("Delete this service permanently? Existing user orders that reference it will still show.")) return;
+    clearMessages();
+    try {
+      const res = await fetch("/api/admin/services/delete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ serviceId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete service");
+      setAdminSuccess(data.message);
       fetchServices();
     } catch (err: any) {
       setAdminError(err.message);
@@ -417,7 +509,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
             KoSh Vote Software — Administrator Panel
           </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Perform administrative control of user wallets, pending deposits, automatic SMM orders, and catalog pricing.
+            Manage user wallets, verify deposits, control order fulfilment, and edit service categories & prices — all manually, no third-party API.
           </p>
         </div>
         
@@ -532,12 +624,18 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
         <button
           id="admin-tab-orders"
           onClick={() => setAdminTab("orders")}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
+          className={`relative flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
             adminTab === "orders" ? "bg-indigo-600 text-white shadow-lg" : "bg-slate-900/40 text-slate-400 hover:text-white"
           }`}
         >
           <ShoppingBag className="w-3.5 h-3.5" />
-          <span>Auto Orders ({orders.length})</span>
+          <span>Orders ({orders.length})</span>
+          {pendingOrderCount > 0 && (
+            <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${hasNewOrderNotification ? "bg-red-500 text-white animate-pulse" : "bg-amber-500/20 text-amber-300"}`}>
+              <Bell className="w-2.5 h-2.5" />
+              {pendingOrderCount} pending
+            </span>
+          )}
         </button>
 
         <button
@@ -665,6 +763,25 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                               title={u.is_blocked === 1 ? "Activate Client" : "Suspend Client"}
                             >
                               {u.is_blocked === 1 ? <UserCheck className="w-3.5 h-3.5" /> : <Ban className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+
+                          {/* Reset Password CTA */}
+                          {u.is_admin === 0 && (
+                            <button
+                              id={`reset-pass-user-${u.id}`}
+                              onClick={() => {
+                                const newPwd = prompt(`Enter new password for ${u.name}:`);
+                                if (newPwd && newPwd.length >= 4) {
+                                  handleResetPassword(u.id, newPwd);
+                                } else if (newPwd) {
+                                  setAdminError("Password must be at least 4 characters");
+                                }
+                              }}
+                              className="p-1.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500 hover:text-white transition-all cursor-pointer"
+                              title="Reset Password"
+                            >
+                              <LockIcon className="w-3.5 h-3.5" />
                             </button>
                           )}
 
@@ -881,7 +998,12 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <ShoppingBag className="w-5 h-5 text-indigo-400" />
-              SMM Auto-Orders Administration
+              Order Management
+              {pendingOrderCount > 0 && (
+                <span className="ml-2 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                  <Bell className="w-3 h-3" /> {pendingOrderCount} new pending
+                </span>
+              )}
             </h2>
 
             {/* Filter Search */}
@@ -896,11 +1018,33 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                 onChange={(e) => setOrderSearch(e.target.value)}
               />
             </div>
+            <button
+              id="admin-orders-sync-btn"
+              type="button"
+              onClick={async () => {
+                clearMessages();
+                try {
+                  const res = await fetch("/api/admin/orders/sync-status", {
+                    method: "POST",
+                    headers: { Authorization: `Bearer ${token}` },
+                  });
+                  const data = await res.json();
+                  if (!res.ok) throw new Error(data.error || "Sync failed");
+                  setAdminSuccess(data.message);
+                  fetchOrders();
+                } catch (err: any) {
+                  setAdminError(err.message);
+                }
+              }}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase tracking-wider py-2 px-4 rounded-xl transition-colors cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Sync from Panel
+            </button>
           </div>
 
           {orders.length === 0 ? (
             <div className="bg-slate-900/40 border border-slate-800 rounded-2xl py-12 text-center text-slate-500 text-sm">
-              No auto orders registered in the system database yet.
+              No orders registered in the system yet.
             </div>
           ) : (
             <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-xl">
@@ -916,7 +1060,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                       <th className="py-3.5 px-4 font-normal text-right">Quantity</th>
                       <th className="py-3.5 px-4 font-normal text-right">Charge</th>
                       <th className="py-3.5 px-4 font-normal text-center">Order Status</th>
-                      <th className="py-3.5 px-4 font-normal text-center">Upstream SMM</th>
+                      <th className="py-3.5 px-4 font-normal text-center">Action</th>
                       <th className="py-3.5 px-4 font-normal">Placed Date</th>
                     </tr>
                   </thead>
@@ -961,28 +1105,26 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                           </select>
                         </td>
                         <td className="py-3 px-4 text-center">
-                          <div className="flex flex-col items-center justify-center gap-1.5">
-                            {ord.api_order_id ? (
-                              <div className="flex flex-col items-center">
-                                <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[9px] font-bold font-mono border border-emerald-500/15">
-                                  Sent: #{ord.api_order_id}
-                                </span>
-                                {ord.api_response && (
-                                  <span className="text-[8px] text-gray-500 font-mono block mt-0.5 truncate max-w-[110px]" title={ord.api_response}>
-                                    {ord.api_response}
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
+                          <div className="flex items-center justify-center gap-1.5">
+                            {ord.status !== "Cancelled" && ord.status !== "Completed" && (
                               <button
                                 type="button"
-                                onClick={() => handleSendUpstream(ord.id)}
-                                disabled={loading}
-                                className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 transition-all shadow-md cursor-pointer disabled:opacity-50"
+                                onClick={() => handleCancelOrder(ord.id)}
+                                className="px-2.5 py-1 rounded bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white text-[9px] font-bold uppercase tracking-wider flex items-center gap-1 border border-red-500/30 transition-all cursor-pointer"
                               >
-                                <RefreshCw className={`w-2.5 h-2.5 ${loading ? 'animate-spin' : ''}`} />
-                                Push SMM
+                                <Ban className="w-2.5 h-2.5" />
+                                Cancel & Refund
                               </button>
+                            )}
+                            {ord.status === "Cancelled" && (
+                              <span className="px-2 py-0.5 rounded bg-red-500/10 text-red-400 text-[9px] font-bold font-mono border border-red-500/15">
+                                Refunded
+                              </span>
+                            )}
+                            {ord.status === "Completed" && (
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 text-[9px] font-bold font-mono border border-emerald-500/15">
+                                Done
+                              </span>
                             )}
                           </div>
                         </td>
@@ -1003,10 +1145,21 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
       {/* --- ADMIN TAB: SERVICE PRICE CONFIGURATOR --- */}
       {adminTab === "services" && (
         <div id="admin-services-panel" className="space-y-6">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <Settings className="w-5 h-5 text-indigo-400" />
-            SMM & WhatsApp Vote Service Pricing Control
-          </h2>
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <Settings className="w-5 h-5 text-indigo-400" />
+              Categories & Service Pricing
+            </h2>
+            <button
+              id="admin-add-service-button"
+              type="button"
+              onClick={() => setAddingService(true)}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase tracking-wider transition-all shadow-lg cursor-pointer self-start md:self-auto"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add Service / Category
+            </button>
+          </div>
 
           <div className="bg-slate-900/40 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-xl">
             <div className="overflow-x-auto">
@@ -1014,6 +1167,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 uppercase font-mono tracking-wider">
                     <th className="py-3.5 px-4 font-normal">Service ID</th>
+                    <th className="py-3.5 px-4 font-normal">Category</th>
                     <th className="py-3.5 px-4 font-normal">Service Description</th>
                     <th className="py-3.5 px-4 font-normal text-right">Price Per 1,000</th>
                     <th className="py-3.5 px-4 font-normal text-right">Min Order Limit</th>
@@ -1025,18 +1179,28 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                   {services.map((s) => (
                     <tr key={s.id} className="hover:bg-slate-950/20 transition-colors">
                       <td className="py-3.5 px-4 font-mono text-slate-500">#{s.id}</td>
+                      <td className="py-3.5 px-4 text-indigo-300 font-medium">{s.category}</td>
                       <td className="py-3.5 px-4 font-semibold text-slate-200">{s.name}</td>
                       <td className="py-3.5 px-4 text-right font-mono font-bold text-white">Rs. {s.price_per_k.toFixed(2)}</td>
                       <td className="py-3.5 px-4 text-right font-mono">{s.min_qty.toLocaleString()}</td>
                       <td className="py-3.5 px-4 text-right font-mono">{s.max_qty.toLocaleString()}</td>
                       <td className="py-3.5 px-4 text-center">
-                        <button
-                          id={`edit-service-${s.id}`}
-                          onClick={() => setEditingService(s)}
-                          className="p-1 px-2.5 rounded bg-slate-850 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-400 border border-slate-800 hover:border-indigo-500/20 transition-all cursor-pointer text-[10px]"
-                        >
-                          Change Price
-                        </button>
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            id={`edit-service-${s.id}`}
+                            onClick={() => setEditingService(s)}
+                            className="p-1 px-2.5 rounded bg-slate-850 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-400 border border-slate-800 hover:border-indigo-500/20 transition-all cursor-pointer text-[10px] flex items-center gap-1"
+                          >
+                            <Edit className="w-2.5 h-2.5" /> Edit
+                          </button>
+                          <button
+                            id={`delete-service-${s.id}`}
+                            onClick={() => handleDeleteService(s.id)}
+                            className="p-1 px-2.5 rounded bg-slate-850 hover:bg-red-600/20 text-slate-300 hover:text-red-400 border border-slate-800 hover:border-red-500/20 transition-all cursor-pointer text-[10px] flex items-center gap-1"
+                          >
+                            <Trash2 className="w-2.5 h-2.5" /> Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1057,12 +1221,32 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                   <X className="w-5 h-5" />
                 </button>
 
-                <h3 className="text-lg font-bold text-white mb-2">Configure SMM Service Price</h3>
+                <h3 className="text-lg font-bold text-white mb-2">Edit Service</h3>
                 <p className="text-xs text-slate-400 mb-6">
-                  Modifying specifications for: <strong className="text-indigo-400">{editingService.name}</strong>
+                  Editing: <strong className="text-indigo-400">{editingService.name}</strong>
                 </p>
 
                 <form onSubmit={handleUpdateServicePrice} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Service Name</label>
+                    <input
+                      type="text"
+                      required
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={editingService.name}
+                      onChange={(e) => setEditingService({ ...editingService, name: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Category</label>
+                    <input
+                      type="text"
+                      required
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={editingService.category}
+                      onChange={(e) => setEditingService({ ...editingService, category: e.target.value })}
+                    />
+                  </div>
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
                       Price Per 1,000 Votes/Orders (PKR)
@@ -1111,17 +1295,17 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                      Upstream Service ID (For SMM Provider Integration)
+                      SMM Panel Service ID <span className="text-slate-500 normal-case">(for auto-dispatch)</span>
                     </label>
                     <input
                       id="edit-service-upstream-id"
                       type="text"
-                      placeholder="e.g. 4392"
+                      placeholder="e.g. 1234"
                       className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
-                      value={editingService.upstream_service_id || ""}
-                      onChange={(e) => setEditingService({ ...editingService, upstream_service_id: e.target.value })}
+                      value={(editingService as any).upstream_service_id || ""}
+                      onChange={(e) => setEditingService({ ...editingService, upstream_service_id: e.target.value } as any)}
                     />
-                    <span className="text-[10px] text-gray-500 mt-1 block">Specify the exact Service ID from your connected SMM provider dashboard.</span>
+                    <p className="mt-1 text-[10px] text-slate-500">Leave empty to keep this service manual (no auto-dispatch).</p>
                   </div>
 
                   <button
@@ -1130,6 +1314,104 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
                     className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-3 px-4 rounded-xl shadow-lg transition-colors cursor-pointer"
                   >
                     Save Service Changes
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Add Service Modal */}
+          {addingService && (
+            <div id="add-service-modal" className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+              <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative">
+                <button
+                  type="button"
+                  onClick={() => setAddingService(false)}
+                  className="absolute top-4 right-4 text-slate-500 hover:text-slate-300"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <h3 className="text-lg font-bold text-white mb-2">Add New Service</h3>
+                <p className="text-xs text-slate-400 mb-6">Create a new service and category shown to users at checkout.</p>
+                <form onSubmit={handleAddService} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Service Name</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Instagram Real Likes"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={newService.name}
+                      onChange={(e) => setNewService({ ...newService, name: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Category</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Instagram Services"
+                      list="admin-existing-categories"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={newService.category}
+                      onChange={(e) => setNewService({ ...newService, category: e.target.value })}
+                    />
+                    <datalist id="admin-existing-categories">
+                      {Array.from(new Set(services.map(s => s.category))).map(cat => (
+                        <option key={cat} value={cat} />
+                      ))}
+                    </datalist>
+                    <span className="text-[10px] text-gray-500 mt-1 block">Pick from existing categories or type a new one.</span>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Price Per 1,000 (PKR)</label>
+                    <input
+                      type="number"
+                      required
+                      step="any"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors"
+                      value={newService.price_per_k}
+                      onChange={(e) => setNewService({ ...newService, price_per_k: e.target.value })}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Min Qty</label>
+                      <input
+                        type="number"
+                        required
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
+                        value={newService.min_qty}
+                        onChange={(e) => setNewService({ ...newService, min_qty: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Max Qty</label>
+                      <input
+                        type="number"
+                        required
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
+                        value={newService.max_qty}
+                        onChange={(e) => setNewService({ ...newService, max_qty: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">SMM Panel Service ID <span className="text-slate-500 normal-case">(optional)</span></label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 1234"
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-sm text-slate-100 outline-none transition-colors font-mono"
+                      value={newService.upstream_service_id}
+                      onChange={(e) => setNewService({ ...newService, upstream_service_id: e.target.value })}
+                    />
+                    <p className="mt-1 text-[10px] text-slate-500">Empty = manual service (no auto-dispatch to panel).</p>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-3 px-4 rounded-xl shadow-lg transition-colors cursor-pointer"
+                  >
+                    Create Service
                   </button>
                 </form>
               </div>
@@ -1148,7 +1430,7 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
               Global System Configuration
             </h2>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Configure active JazzCash & Easypaisa payment details shown during user top-ups, and provide credentials for automatic upstream SMM order dispatching.
+              Configure active JazzCash & Easypaisa payment details shown during user top-ups.
             </p>
           </div>
 
@@ -1222,38 +1504,31 @@ export default function AdminDashboard({ token, onRefreshUserBalance }: AdminDas
               </div>
             </div>
 
-            {/* Upstream SMM Section */}
+            {/* SMM Panel API Section */}
             <div className="p-4 bg-black/40 rounded-xl border border-white/5 space-y-4">
-              <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">Upstream SMM Provider Integration</h3>
-              
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                    SMM Provider API Base URL
-                  </label>
-                  <input
-                    id="admin-settings-smm-url"
-                    type="url"
-                    placeholder="e.g. https://smmprovider.com/api/v2"
-                    className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
-                    value={settings.smm_api_url || ""}
-                    onChange={(e) => setSettings({ ...settings, smm_api_url: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
-                    Provider API Key / Token
-                  </label>
-                  <input
-                    id="admin-settings-system-api-key"
-                    type="text"
-                    placeholder="Provide SMM platform authentication token"
-                    className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
-                    value={settings.system_api_key || ""}
-                    onChange={(e) => setSettings({ ...settings, system_api_key: e.target.value })}
-                  />
-                </div>
+              <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-wider">SMM Panel API (Auto-Dispatch)</h3>
+              <p className="text-[10px] text-slate-500 -mt-2">Orders are auto-sent to this panel when a service has a mapped Panel Service ID.</p>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Panel API URL</label>
+                <input
+                  id="admin-settings-smm-url"
+                  type="text"
+                  placeholder="https://example.com/api/v2"
+                  className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
+                  value={settings.smm_api_url || ""}
+                  onChange={(e) => setSettings({ ...settings, smm_api_url: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Panel API Key</label>
+                <input
+                  id="admin-settings-smm-key"
+                  type="text"
+                  placeholder="Your SMM panel API key"
+                  className="w-full bg-slate-950 border border-white/10 focus:border-indigo-500/80 rounded-xl py-2.5 px-4 text-xs text-slate-100 outline-none transition-colors font-mono"
+                  value={settings.system_api_key || ""}
+                  onChange={(e) => setSettings({ ...settings, system_api_key: e.target.value })}
+                />
               </div>
             </div>
 
